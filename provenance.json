@@ -604,7 +604,7 @@
     {
       "path": "sft/prepare_trajectories.py",
       "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
-      "sha256": "b5cdd1a37152628c5e43930a6059ad537b956a8b10220ba1c65ec364b6dfb3f1"
+      "sha256": "6a7d55e58d615da45a49da58a51c3dcfee18dbd79229466c5b6c4ff504ce49b0"
     },
     {
       "path": "sft/train_unsloth.py",

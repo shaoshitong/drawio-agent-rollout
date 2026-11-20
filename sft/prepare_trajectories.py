@@ -272,7 +272,7 @@ def main():
     parser.add_argument("--max-tokens", type=int, required=True)
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=3407)
-    parser.add_argument("--workers", type=int, choices=(1, 2, 4, 8, 16), default=1)
+    parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--max-train-episodes", type=int, default=0)
     parser.add_argument("--max-validation-episodes", type=int, default=0)
     parser.add_argument("--no-thinking", action="store_true")
