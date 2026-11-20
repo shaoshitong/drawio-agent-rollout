@@ -183,6 +183,12 @@ def make_collator(model, processor, examples, config, output):
 
 
 def setup(config):
+    # Runtime autotuning synchronizes every CUDA stream and can wait on a DDP
+    # reduction whose peers are still tuning a different sequence shape.
+    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
+        import torch._inductor.config as inductor_config
+
+        inductor_config.triton.autotune_pointwise = False
     from unsloth import FastVisionModel
     import torch
 
