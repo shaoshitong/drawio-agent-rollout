@@ -183,13 +183,6 @@ def make_collator(model, processor, examples, config, output):
 
 
 def setup(config):
-    # Runtime autotuning synchronizes every CUDA stream and can wait on a DDP
-    # reduction whose peers are still tuning a different sequence shape.
-    if int(os.environ.get("WORLD_SIZE", "1")) > 1:
-        import torch._inductor.config as inductor_config
-
-        inductor_config.triton.autotune_pointwise = False
-        inductor_config.dynamic_scale_rblock = False
     from unsloth import FastVisionModel
     import torch
 
@@ -417,6 +410,13 @@ def train(config, model, processor, examples, collator, output):
         model=model, processing_class=processor, train_dataset=dataset,
         data_collator=collator, args=args, callbacks=[UpdateEvidence()],
     )
+    # Apply after Unsloth initializes its compiler defaults. Runtime tuning
+    # synchronizes all streams and can wait on another rank's DDP reduction.
+    if args.world_size > 1:
+        import torch._inductor.config as inductor_config
+
+        inductor_config.triton.autotune_pointwise = False
+        inductor_config.dynamic_scale_rblock = False
     trainer.curriculum_plan = plan
     if config.get("evaluation_enabled", True):
         from .evaluation import make_evaluation_callback
