@@ -189,6 +189,7 @@ def setup(config):
         import torch._inductor.config as inductor_config
 
         inductor_config.triton.autotune_pointwise = False
+        inductor_config.dynamic_scale_rblock = False
     from unsloth import FastVisionModel
     import torch
 
