@@ -293,9 +293,18 @@ def train(config, model, processor, examples, collator, output):
 
     class UpdateEvidence(TrainerCallback):
         def on_train_begin(self, args, state, control, **kwargs):
+            import torch
+
+            torch.cuda.reset_peak_memory_stats()
             if state.is_world_process_zero:
                 evidence.update(initial=adapter_hash(trainer.accelerator.unwrap_model(trainer.model)),
-                                initial_global_step=state.global_step)
+                                initial_global_step=state.global_step,
+                                loss_runtime={
+                                    "model_accepts_loss_kwargs": trainer.model_accepts_loss_kwargs,
+                                    "average_tokens_across_devices": args.average_tokens_across_devices,
+                                    "gradient_accumulation_steps": args.gradient_accumulation_steps,
+                                    "world_size": args.world_size,
+                                })
                 write_json(output / "adapter-update.json", evidence)
 
         def on_optimizer_step(self, args, state, control, optimizer=None, **kwargs):
@@ -313,6 +322,14 @@ def train(config, model, processor, examples, collator, output):
             write_json(output / "adapter-update.json", evidence)
 
         def on_train_end(self, args, state, control, **kwargs):
+            import torch
+
+            (output / f"memory-rank-{args.process_index}.json").write_text(json.dumps({
+                "max_allocated_bytes": torch.cuda.max_memory_allocated(),
+                "max_reserved_bytes": torch.cuda.max_memory_reserved(),
+                "device_total_bytes": torch.cuda.get_device_properties(0).total_memory,
+                "global_step": state.global_step,
+            }, indent=2) + "\n")
             if state.is_world_process_zero:
                 evidence.update(final=adapter_hash(trainer.accelerator.unwrap_model(trainer.model)),
                                 final_global_step=state.global_step)
