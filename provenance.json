@@ -232,7 +232,7 @@
     {
       "path": "pyproject.toml",
       "source": "repository integration",
-      "sha256": "e14caea50481fdb662589430b5c3b7b9b5046ab14f08cbeec84e4a2f20da6bf5"
+      "sha256": "079426bbc63c40a3827be33327fa04ec577998f58755ccaf61246bd518b8046c"
     },
     {
       "path": "rollout/ablate_skill.py",
@@ -445,6 +445,11 @@
       "sha256": "99a771b5c6f311fa81d147127cffc6c1695355b32d867a3d9f3f991ca9e7a124"
     },
     {
+      "path": "scripts/hf_metadata_relay.py",
+      "source": "repository integration; SSH metadata RPC only, direct remote storage uploads",
+      "sha256": "51755d01e0d5b2f6aa3f7bc0f63568e461f2604b7956b0a50bc93f8d3fc83653"
+    },
+    {
       "path": "scripts/package_artifacts.py",
       "source": "repository integration",
       "sha256": "e7740bf065cbce1d3ca5cb245667cc47646537c420bd64981d086b95941d183e"
@@ -458,6 +463,11 @@
       "path": "scripts/prepare_validation.py",
       "source": "repository integration",
       "sha256": "679d7110061b9ae32633954cb81bc8231076563ff17123258bc3984cece34d90"
+    },
+    {
+      "path": "scripts/publish_hf.py",
+      "source": "shaoshitong/xml_pipeline@886f86264540fd24799fdbffbae519ab718e55ff:operations/teacher_trajectory/publish_hf.py",
+      "sha256": "7c46a2a52306dae5809c14dd05bf475d490517c31f8707c09bb8a45df8c81c4e"
     },
     {
       "path": "scripts/recompress_validation.py",
