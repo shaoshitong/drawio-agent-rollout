@@ -467,7 +467,7 @@
     {
       "path": "scripts/publish_hf.py",
       "source": "shaoshitong/xml_pipeline@886f86264540fd24799fdbffbae519ab718e55ff:operations/teacher_trajectory/publish_hf.py",
-      "sha256": "7c46a2a52306dae5809c14dd05bf475d490517c31f8707c09bb8a45df8c81c4e"
+      "sha256": "a52a230597e3bd8a6dfa4ae8d8daf097319f0b4360757e7552727f4403594202"
     },
     {
       "path": "scripts/recompress_validation.py",

@@ -4,6 +4,7 @@ import argparse
 from functools import partial
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -52,6 +53,9 @@ class UploadSession(requests.Session):
 
 
 def publish(args):
+    if not args.allow_bulk_proxy:
+        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+            os.environ.pop(name, None)
     args.state.parent.mkdir(parents=True, exist_ok=True)
     progress = {
         "phase": "checking",
