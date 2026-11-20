@@ -1,0 +1,238 @@
+{
+  "reference_sha256": "337a70f8a807cd8eaa005da54294da2436e58f3154c92eb1acc4095b69500573",
+  "reference_dimensions": [
+    1133,
+    393
+  ],
+  "baseline_models": [
+    {
+      "model": "Qwen3.5-4B",
+      "stages": [
+        {
+          "role": "generator",
+          "round": "round1",
+          "exit": 0,
+          "timed_out": false,
+          "completed": true,
+          "seconds": 590.95,
+          "tool_calls": 34,
+          "max_input_tokens": 107773,
+          "max_single_output_tokens": 9185,
+          "mcp_calls": []
+        },
+        {
+          "role": "generator",
+          "round": "round2",
+          "exit": 0,
+          "timed_out": false,
+          "completed": true,
+          "seconds": 78.85,
+          "tool_calls": 5,
+          "max_input_tokens": 120698,
+          "max_single_output_tokens": 9066,
+          "mcp_calls": []
+        },
+        {
+          "role": "reviewer",
+          "round": "round1",
+          "exit": 0,
+          "timed_out": false,
+          "completed": true,
+          "seconds": 14.7,
+          "tool_calls": 5,
+          "max_input_tokens": 17147,
+          "max_single_output_tokens": 998,
+          "mcp_calls": []
+        }
+      ],
+      "artifacts": [
+        {
+          "name": "round1.drawio",
+          "dimensions": [
+            1116,
+            1026
+          ],
+          "vertices": 89,
+          "edges": 4,
+          "source_sha256": "42418daf393079a3ab3cb02e2075cffc1eb6695d69f4fde8329dadf5d8675223",
+          "png_sha256": "fea33ad87b52830c395d61cd0b9f6e42c8958a8e198337441abc61571e309cb7",
+          "model_png_pixel_equal": true
+        },
+        {
+          "name": "round2.drawio",
+          "dimensions": [
+            1116,
+            1026
+          ],
+          "vertices": 90,
+          "edges": 4,
+          "source_sha256": "8b25fe7e8ef50911b911ddf79c940233a9757b5289e774aaee6ff4c22e9749d2",
+          "png_sha256": "b39996d3d783f5d061041fb2c050f4ee5fae46ffa1cf843e3fc13ea39bbc9b38",
+          "model_png_pixel_equal": true
+        }
+      ]
+    },
+    {
+      "model": "Qwen3.5-9B (timeout)",
+      "stages": [
+        {
+          "role": "generator",
+          "round": "round1",
+          "exit": 124,
+          "timed_out": true,
+          "completed": false,
+          "seconds": 1350.3,
+          "tool_calls": 23,
+          "max_input_tokens": 158642,
+          "max_single_output_tokens": 18465,
+          "mcp_calls": []
+        }
+      ],
+      "artifacts": [
+        {
+          "name": "round1.drawio",
+          "dimensions": [
+            1136,
+            495
+          ],
+          "vertices": 131,
+          "edges": 27,
+          "source_sha256": "7e3d0f4b22d785c8ac365289a7c30cce37effcec1008eeb9ba2dcea2293223dd",
+          "png_sha256": "2cc38580aec828ea88f85f49bcc8e0521d6894ba2e3b43d92f389b472a6402b1",
+          "model_png_pixel_equal": true
+        }
+      ]
+    },
+    {
+      "model": "DPSK",
+      "stages": [
+        {
+          "role": "generator",
+          "round": "round1",
+          "exit": 0,
+          "timed_out": false,
+          "completed": true,
+          "seconds": 951.77,
+          "tool_calls": 119,
+          "max_input_tokens": 7170,
+          "max_single_output_tokens": 9675,
+          "mcp_calls": []
+        },
+        {
+          "role": "generator",
+          "round": "round2",
+          "exit": 0,
+          "timed_out": false,
+          "completed": true,
+          "seconds": 128.8,
+          "tool_calls": 11,
+          "max_input_tokens": 1170,
+          "max_single_output_tokens": 4095,
+          "mcp_calls": []
+        },
+        {
+          "role": "reviewer",
+          "round": "round1",
+          "exit": 0,
+          "timed_out": false,
+          "completed": true,
+          "seconds": 42.5,
+          "tool_calls": 15,
+          "max_input_tokens": 26356,
+          "max_single_output_tokens": 667,
+          "mcp_calls": []
+        }
+      ],
+      "artifacts": [
+        {
+          "name": "round1.drawio",
+          "dimensions": [
+            1142,
+            402
+          ],
+          "vertices": 235,
+          "edges": 44,
+          "source_sha256": "24b72b5dced31581355db1034ea36a3d67d8eedf3adc7692ebbb6c49d93dbe0d",
+          "png_sha256": "ad7b3fea927484bec8b56a244bbaee3d0a016f510d00184c75d17f8d62ec91f6",
+          "model_png_pixel_equal": true
+        },
+        {
+          "name": "round2.drawio",
+          "dimensions": [
+            1142,
+            402
+          ],
+          "vertices": 235,
+          "edges": 44,
+          "source_sha256": "24b72b5dced31581355db1034ea36a3d67d8eedf3adc7692ebbb6c49d93dbe0d",
+          "png_sha256": "ad7b3fea927484bec8b56a244bbaee3d0a016f510d00184c75d17f8d62ec91f6",
+          "model_png_pixel_equal": true
+        }
+      ]
+    }
+  ],
+  "qwen38_yarn": {
+    "source_png_identical_on_independent_rerender": true,
+    "first_round_unchanged": true,
+    "changed_cell_ids": [
+      "c165",
+      "c105",
+      "c259",
+      "c184",
+      "c79",
+      "c211",
+      "c233",
+      "c258",
+      "c232",
+      "c47",
+      "c130",
+      "c269"
+    ],
+    "native_cells_only": true,
+    "xml_sha256": "93737d5c3f2c70fc1c2ecfa5bb4fc25a6253c70ee6e9cde5f42f1a8e68be326e",
+    "png_sha256": "cb41a3e16fabe7e43c9ae4aac109e6bdf626c1108d340b6f105a0471e79ff79b",
+    "vertices": 249,
+    "edges": 22,
+    "dimensions": [
+      1141,
+      401
+    ]
+  },
+  "qwen38_medium": {
+    "source_png_identical_on_independent_rerender": true,
+    "changed_cell_ids": [
+      "p4_bfs",
+      "p4_attn",
+      "p2_enc",
+      "p2_sub2",
+      "p2_sub1",
+      "p2_clf",
+      "p2_title",
+      "p2_sub3",
+      "p4_cross_col",
+      "p4_cross_row"
+    ],
+    "native_cells_only": true,
+    "xml_sha256": "e19f23507b38b8fd75bef30d7ca84621bf1dae9db256fba2d775b1d9cdfc5959",
+    "png_sha256": "8015a9f22e4aa6635896805b2660e5b07597c9821c6a373f72d5036696d7c39f",
+    "vertices": 77,
+    "edges": 30,
+    "dimensions": [
+      1141,
+      401
+    ]
+  },
+  "qwen38_native": {
+    "kind": "host_stopped_after_build_first_workflow_violation",
+    "reason": "After verified raw compiler feedback, at least23image inspection calls, no build actions, unchanged failing script, noXML. Recorded as incomplete condition, not a model success or a time-limit outcome.",
+    "tool_calls_after_compiler_feedback": 24,
+    "build_actions_after_feedback": 0,
+    "host_modified_model_code": false,
+    "gold_feedback": false,
+    "native_condition_success": false
+  },
+  "optimizer_started": false,
+  "training_eligible": false,
+  "gold_feedback": false,
+  "scope": "Single image, unequal diagnostic/recovery budgets; render consistency does not certify fidelity."
+}

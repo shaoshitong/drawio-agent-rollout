@@ -1,0 +1,65 @@
+{
+  "protocol": {
+    "generations": 2,
+    "reviews": 1,
+    "goal": false,
+    "gold_feedback": false,
+    "max_output": 131072,
+    "reviewer": "Qwen/Qwen3.5-4B",
+    "reviewer_frozen": true
+  },
+  "models": [
+    {
+      "id": "Qwen/Qwen3.5-4B",
+      "deployment": "SGLang",
+      "context": 1048576,
+      "sampling": "precise-coding",
+      "measured_outcome": "completed_low_fidelity"
+    },
+    {
+      "id": "Qwen/Qwen3.5-9B",
+      "deployment": "SGLang",
+      "context": 1048576,
+      "sampling": "precise-coding",
+      "measured_outcome": "timeout_with_intermediate_xml"
+    },
+    {
+      "id": "Qwen/Qwen3.8-27B",
+      "deployment": "SGLang",
+      "context": 1048576,
+      "static_yarn_factor": 4,
+      "sampling": "qwen38",
+      "temperature": 1.0,
+      "preserve_thinking": true,
+      "effort": "xhigh",
+      "measured_outcome": "completed_with_remaining_visual_differences"
+    },
+    {
+      "id": "deepseek-flash",
+      "display_name": "DeepSeek Flash 4.1",
+      "deployment": "DeepSeek API",
+      "context": 1048576,
+      "effort": "max",
+      "measured_outcome": "completed"
+    }
+  ],
+  "sft": {
+    "exporter_implemented": true,
+    "candidate_frameworks": [
+      "Transformers/TRL",
+      "AReaL SFT"
+    ],
+    "trainer_verified": false
+  },
+  "rl": {
+    "framework": "AReaL",
+    "source_commit": "64a7fcca3936ddf2ab16bb1dd3e776d66ced31ff",
+    "external_api_rollout_verified": true,
+    "token_backed_training_verified": false,
+    "optimizer_iteration_verified": false,
+    "behavior_ids_available": false,
+    "behavior_logprobs_available": false,
+    "reward_weights": null
+  },
+  "historical_comparison_is_equal_compute": false
+}
