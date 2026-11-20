@@ -1,6 +1,7 @@
 """Audit actual multimodal labels, then train generator decisions in curriculum order."""
 
 import argparse
+from bisect import bisect_left
 from collections import Counter
 import hashlib
 import importlib.metadata
@@ -185,6 +186,7 @@ def setup(config):
     from unsloth import FastVisionModel
     import torch
 
+    torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
     model, processor = FastVisionModel.from_pretrained(
         model_name=config["model_name"], max_seq_length=config["max_seq_length"],
         dtype=torch.bfloat16, load_in_4bit=False, load_in_16bit=True,
@@ -273,15 +275,66 @@ def preflight(config, model, processor, examples, collator, output):
     return report
 
 
+def curriculum_order(examples, config, world_size):
+    import torch
+    from transformers.trainer_pt_utils import LengthGroupedSampler
+
+    rows = examples.dataset.rows[:len(examples)]
+    episodes = {row["episode"]: row["final_components"] for row in rows}
+    components = sorted(episodes.values())
+    count = config["difficulty_stages"]
+    boundaries = [components[math.ceil(stage * len(components) / count) - 1]
+                  for stage in range(1, count)]
+    order, stages = [], []
+    global_batch = world_size * config["batch_size"]
+    for stage in range(count):
+        indices = [index for index, row in enumerate(rows)
+                   if bisect_left(boundaries, row["final_components"]) == stage]
+        if not indices:
+            continue
+        seed = config["seed"] + stage
+        sampler = LengthGroupedSampler(
+            batch_size=global_batch, lengths=[rows[index]["token_count"] for index in indices],
+            generator=torch.Generator(device="cpu").manual_seed(seed),
+        )
+        selected = [indices[index] for index in sampler]
+        order.extend(selected)
+        stages.append({
+            "difficulty_stage": stage, "seed": seed,
+            "episodes": len({rows[index]["episode"] for index in indices}), "decisions": len(indices),
+            "components_min": min(rows[index]["final_components"] for index in indices),
+            "components_max": max(rows[index]["final_components"] for index in indices),
+            "generation_stage_counts": dict(Counter(str(rows[index]["stage"]) for index in indices)),
+            "source_indices_sha256": hashlib.sha256(json.dumps(selected).encode()).hexdigest(),
+        })
+    return order, {
+        "policy": config["sampler_policy"], "seed": config["seed"], "world_size": world_size,
+        "global_microbatch_size": global_batch, "difficulty_boundaries": boundaries,
+        "difficulty_stage_rule": "bisect_left: components <= boundary belong to the lower stage",
+        "quantile_unit": "unique training episode, not decision",
+        "generation_stage_field": "original row.stage (generation1 / repair2), independent of difficulty",
+        "stages": stages, "decisions": len(order),
+        "source_indices_sha256": hashlib.sha256(json.dumps(order).encode()).hexdigest(),
+        "sample_ids_sha256": hashlib.sha256(json.dumps([rows[index]["sample_id"] for index in order]).encode()).hexdigest(),
+        "sample_contents": "unchanged full prefixes and current completions; order only",
+    }
+
+
 def train(config, model, processor, examples, collator, output):
     from datasets import Dataset
-    from torch.utils.data import SequentialSampler
     from trl import SFTConfig, SFTTrainer
     from transformers import TrainerCallback
 
+    order, plan = curriculum_order(examples, config, int(os.environ.get("WORLD_SIZE", "1")))
+    if config.get("resume_from_checkpoint"):
+        previous = json.loads((Path(config["resume_from_checkpoint"]).parent / "curriculum-order.json").read_text())
+        if previous["source_indices_sha256"] != plan["source_indices_sha256"]:
+            raise ValueError("Resume sampler order differs from the saved curriculum")
+    write_json(output / "curriculum-order.json", plan)
+
     class CurriculumTrainer(SFTTrainer):
         def _get_train_sampler(self, train_dataset=None):
-            return SequentialSampler(self.train_dataset if train_dataset is None else train_dataset)
+            return order
 
         def log(self, logs, *args, **kwargs):
             for key in ("loss", "train_loss", "grad_norm"):
@@ -327,7 +380,7 @@ def train(config, model, processor, examples, collator, output):
             (output / f"memory-rank-{args.process_index}.json").write_text(json.dumps({
                 "max_allocated_bytes": torch.cuda.max_memory_allocated(),
                 "max_reserved_bytes": torch.cuda.max_memory_reserved(),
-                "device_total_bytes": torch.cuda.get_device_properties(0).total_memory,
+                "device_total_bytes": torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory,
                 "global_step": state.global_step,
             }, indent=2) + "\n")
             if state.is_world_process_zero:
@@ -344,7 +397,8 @@ def train(config, model, processor, examples, collator, output):
         per_device_train_batch_size=config["batch_size"],
         gradient_accumulation_steps=config["gradient_accumulation_steps"],
         bf16=True, fp16=False, optim="adamw_torch", seed=config["seed"],
-        warmup_ratio=config["warmup_ratio"], lr_scheduler_type="cosine",
+        warmup_ratio=config["warmup_ratio"], lr_scheduler_type=config["lr_scheduler_type"],
+        max_grad_norm=config["max_grad_norm"],
         max_length=None, packing=False, padding_free=False, assistant_only_loss=False,
         completion_only_loss=True, remove_unused_columns=False,
         dataset_kwargs={"skip_prepare_dataset": True}, dataloader_num_workers=0,
@@ -356,6 +410,18 @@ def train(config, model, processor, examples, collator, output):
         model=model, processing_class=processor, train_dataset=dataset,
         data_collator=collator, args=args, callbacks=[UpdateEvidence()],
     )
+    trainer.curriculum_plan = plan
+    if config.get("evaluation_enabled", True):
+        from .evaluation import make_evaluation_callback
+
+        validation = Examples(config["manifest"], "validation", config["enable_thinking"])
+        probe_collator = make_collator(model, processor, examples, config, output / "train-probe")
+        validation_collator = make_collator(model, processor, validation, config, output / "validation")
+        trainer.add_callback(make_evaluation_callback(
+            trainer, examples, validation, probe_collator, validation_collator,
+            config["manifest"], output, validation_samples=config["validation_samples"],
+            train_samples=config["train_probe_samples"],
+        ))
     collator.audited_batches = collator.audited_examples = 0
     result = trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     # A short explicit smoke run also needs optimizer and RNG state, even before save_steps.
@@ -367,7 +433,7 @@ def train(config, model, processor, examples, collator, output):
     write_json(output / "result.json", {
         "status": "completed", "global_step": trainer.state.global_step,
         "metrics": result.metrics, "last_checkpoint": str(output / f"checkpoint-{trainer.state.global_step}"),
-        "curriculum": "manifest order; sequential episodes and chronological decisions",
+        "curriculum": plan,
         "runtime_audit": collator.audit_progress(),
         "adapter_update": evidence,
     })
@@ -406,7 +472,10 @@ def main():
             raise ValueError("Existing training output: resume explicitly or choose a pristine output directory")
     if args.mode == "train":
         identity = {key: config.get(key) for key in
-                    ("model_name", "split", "max_train_samples", "lora_rank", "lora_alpha", "target_modules")}
+                    ("model_name", "split", "max_train_samples", "lora_rank", "lora_alpha", "target_modules",
+                     "batch_size", "gradient_accumulation_steps", "difficulty_stages", "sampler_policy", "seed",
+                     "lr_scheduler_type", "learning_rate", "warmup_ratio", "max_grad_norm")}
+        identity["world_size"] = int(os.environ.get("WORLD_SIZE", "1"))
         identity["manifest_sha256"] = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
         if config.get("resume_from_checkpoint"):
             checkpoint = Path(config["resume_from_checkpoint"])
