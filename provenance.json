@@ -589,7 +589,7 @@
     {
       "path": "scripts/run_sft.sh",
       "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
-      "sha256": "118e5fb163fc1c1a3f2236d9462fb3b332efcc17b44600e1dea8fdd054f6a016"
+      "sha256": "9ffe2d01df5faaa75e96b3e6d3d8af664f5f963aac1d09bb1d538b14124c3359"
     },
     {
       "path": "scripts/setup_unsloth.sh",

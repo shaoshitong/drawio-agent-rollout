@@ -18,6 +18,8 @@ export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
 mkdir -p "$TMPDIR"
 cd "$base"
 if [[ ${DRAWIO_PROCESSES:-1} -gt 1 ]]; then
+  export UNSLOTH_COMPILE_DISABLE=1
+  export UNSLOTH_COMPILE_LOCATION="$base/unsloth_compiled_cache_eager_ddp"
   exec -a python "$base/env/bin/python" -m torch.distributed.run \
     --rdzv-backend=c10d --rdzv-endpoint=127.0.0.1:0 --local-addr=127.0.0.1 \
     --nproc_per_node="$DRAWIO_PROCESSES" --module sft.train_unsloth "$@"
