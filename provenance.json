@@ -630,6 +630,11 @@
       "path": "sft/monitor.py",
       "source": "Read-only remote SFT progress observer",
       "sha256": "a4bbf1ca027dc9db4c4fd16cb68b9b9195fbf7908c15ad91988aecf3224bce0a"
+    },
+    {
+      "path": "sft/check_native_prefixes.py",
+      "source": "CPU native-prefix equivalence checker; does not change active SFT inputs",
+      "sha256": "3a334febaf31d0753dbd0aad1a8f26590343e6f39cdcc092bc992a4c33b47996"
     }
   ]
 }
