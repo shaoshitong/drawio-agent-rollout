@@ -166,17 +166,17 @@ def main():
         command = [
             sys.executable,
             str(folder / "generalization.py"),
-            "check",
+            "verify",
             str(data / "generalization/sources_100"),
             str(data / "generalization/variants_100"),
             str(output),
             "--workers",
-            str(args.workers),
+            str(min(args.workers, 8)),
             "--one-per-source",
         ]
     else:
         command = [sys.executable, str(folder / "acceptance.py"), "--out", str(output)]
-    result = subprocess.run(command, env=environment)
+    result = subprocess.run(command, env=environment, cwd=data)
     if args.suite == "controls":
         return subprocess.run(
             [sys.executable, str(folder / "controls.py"), "check", str(data / "controls.jsonl"), str(output)],

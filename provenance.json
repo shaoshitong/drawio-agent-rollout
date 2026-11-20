@@ -12,7 +12,7 @@
     {
       "path": "README.md",
       "source": "repository integration",
-      "sha256": "295dfdb2969e176c4166200a8ac120f71f182c283204bb3817edfe2ad75ef4c2"
+      "sha256": "4d7ae889cb1cb3ab1b0a58f738a491e5b2095035b8f5f77a3f3a857bdd6177c7"
     },
     {
       "path": "configs/datasets.json",
@@ -445,6 +445,16 @@
       "sha256": "99a771b5c6f311fa81d147127cffc6c1695355b32d867a3d9f3f991ca9e7a124"
     },
     {
+      "path": "scripts/package_artifacts.py",
+      "source": "repository integration",
+      "sha256": "e7740bf065cbce1d3ca5cb245667cc47646537c420bd64981d086b95941d183e"
+    },
+    {
+      "path": "scripts/package_pairs.py",
+      "source": "repository integration",
+      "sha256": "e19ccb8554ab95e2420d523f6695e8bcfaab91255ad1f4b19c35af137cae5fa1"
+    },
+    {
       "path": "scripts/prepare_validation.py",
       "source": "repository integration",
       "sha256": "679d7110061b9ae32633954cb81bc8231076563ff17123258bc3984cece34d90"
@@ -544,7 +554,7 @@
     {
       "path": "test/replay.py",
       "source": "repository integration",
-      "sha256": "367e5bd69419bc7416774fd3e6278a25c31d86b580e9edf434662a5d1dbc59cc"
+      "sha256": "9b2c25c794d7390a9050ef90411f2c0bf45744a83721d369596e38bbf14ae408"
     }
   ]
 }
