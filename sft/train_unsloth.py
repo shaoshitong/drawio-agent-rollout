@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import time
+from types import MethodType
 
 from .data import ManifestDataset, token_sha256
 
@@ -206,6 +207,18 @@ def setup(config):
         use_gradient_checkpointing="unsloth", random_state=config["seed"],
     )
     FastVisionModel.for_training(model)
+    # Each input to this projection is exactly one non-overlapping image patch.
+    # Linear uses the same weights without the pathological eager Conv3d path.
+    projection = next(module.proj for module in model.modules()
+                      if type(module).__name__ == "Qwen3_5VisionPatchEmbed")
+
+    def patch_projection(self, inputs, weight, bias):
+        import torch.nn.functional as functional
+
+        values = functional.linear(inputs.flatten(1), weight.flatten(1), bias)
+        return values[:, :, None, None, None]
+
+    projection._conv_forward = MethodType(patch_projection, projection)
     examples = Examples(config["manifest"], config["split"], config["enable_thinking"],
                         config.get("max_train_samples"))
     collator = make_collator(model, processor, examples, config, Path(config["output"]))
