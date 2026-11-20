@@ -574,7 +574,7 @@
     {
       "path": "configs/sft-9b.json",
       "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
-      "sha256": "1ec9b58782ab3c9cd16a26f27f88ed552f9a78e2afc9d9b82c0580a34164c8a2"
+      "sha256": "ea33200c5c984b093d3e6baa494dc27592cd730869192ef5d7c8deb7d797f000"
     },
     {
       "path": "scripts/fetch_model.py",
@@ -609,7 +609,7 @@
     {
       "path": "sft/train_unsloth.py",
       "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
-      "sha256": "662f7ba66a82f55ced51469c23010bcb22f7e2345412ab062090d408e4ecdc87"
+      "sha256": "bbc503e68eae47124bed0caa3ccc5a0a6e39d1a9107d774bb57beb7ca32f6648"
     },
     {
       "path": "sft/check_prefix_chains.py",

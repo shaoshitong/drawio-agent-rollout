@@ -492,7 +492,8 @@ def main():
             raise ValueError("Existing training output: resume explicitly or choose a pristine output directory")
     if args.mode == "train":
         identity = {key: config.get(key) for key in
-                    ("model_name", "split", "max_train_samples", "lora_rank", "lora_alpha", "target_modules",
+                    ("model_name", "split", "max_train_samples", "max_seq_length", "num_train_epochs", "max_steps",
+                     "lora_rank", "lora_alpha", "target_modules",
                      "batch_size", "gradient_accumulation_steps", "difficulty_stages", "sampler_policy", "seed",
                      "lr_scheduler_type", "learning_rate", "warmup_ratio", "max_grad_norm")}
         identity["world_size"] = int(os.environ.get("WORLD_SIZE", "1"))
