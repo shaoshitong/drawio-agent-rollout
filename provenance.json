@@ -12,17 +12,17 @@
     {
       "path": "README.md",
       "source": "repository integration",
-      "sha256": "e5aa2f8d2509e03d083d48789c5532402d79bee71600ec0c5cfe9d5abc43404b"
+      "sha256": "295dfdb2969e176c4166200a8ac120f71f182c283204bb3817edfe2ad75ef4c2"
     },
     {
       "path": "configs/datasets.json",
       "source": "repository integration",
-      "sha256": "4f1ca12d6f214dba9dabff45790b7f2bab921c6ec4b754dd1fa8dba39c98b679"
+      "sha256": "ec5de18e6ba3abab890179aeac7bea8856236e508f0d914e7c6bbd2b75c9d684"
     },
     {
       "path": "configs/models.json",
       "source": "repository integration",
-      "sha256": "aa7bd6405bc9d29ed0c701e2e96f60af8ca95e6d9dd09e7ebe7e24cd2a5ae9f8"
+      "sha256": "09e4e5fa609da2ba9f54e0653467ec4926590574ed86bc3345466a541e2ff4a7"
     },
     {
       "path": "configs/validation.json",
@@ -233,16 +233,6 @@
       "path": "pyproject.toml",
       "source": "repository integration",
       "sha256": "e14caea50481fdb662589430b5c3b7b9b5046ab14f08cbeec84e4a2f20da6bf5"
-    },
-    {
-      "path": "results/model-comparison.json",
-      "source": "repository integration",
-      "sha256": "8c095ced731bce5b702129b3128e59d579d8a6d04040676c150acd9b800b6804"
-    },
-    {
-      "path": "results/refactor-validation.json",
-      "source": "repository integration",
-      "sha256": "6d6a0b180d2adabdd0dbae329171b9d7aa4c7bfb72a6555603a1cf8645f7d738"
     },
     {
       "path": "rollout/ablate_skill.py",

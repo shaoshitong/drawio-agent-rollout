@@ -8,10 +8,7 @@
         "code_sha256",
         "image_file",
         "image_sha256"
-      ],
-      "current_exact_count": null,
-      "user_reported_count": "5000+",
-      "regression_snapshot_count": 5344
+      ]
     },
     "teacher_trajectories": {
       "root_env": "DRAWIO_TRAJECTORY_ROOT",
@@ -19,17 +16,11 @@
       "decision_index": "sft-all-decisions.jsonl",
       "decision_schema": "qwen-teacher-decision/1",
       "mutable_collection": true,
-      "recent_audited_observation": {
-        "at_utc": "2026-11-20T11:11:35.487771+00:00",
-        "completed_episodes": 188,
-        "audited_episodes": 188,
-        "eligible_decision_candidates": 31116
-      },
       "fidelity_verified_by_integrity_audit": false
     }
   },
   "raw_data_in_repository": false,
-  "training_started": false,
   "episode_count_is_not_decision_count": true,
-  "training_requires_a_versioned_snapshot": true
+  "training_requires_a_versioned_snapshot": true,
+  "hf_repository": "sst12345/png-to-editable-drawio-20261120"
 }
