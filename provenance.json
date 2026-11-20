@@ -506,6 +506,11 @@
       "sha256": "dec40702ba2a1d967fe4abad84b50ebd436a79acbfe757f76e0aca245bebe900"
     },
     {
+      "path": "sft/audit_corpus.py",
+      "source": "SFT preflight XML resource audit",
+      "sha256": "b1099fa8d2bf64fe125af5bfcff4fb1d1a46c1eedac6f2048246274745dc05cc"
+    },
+    {
       "path": "sft/audit_completed.py",
       "source": "operations/teacher_trajectory/audit_completed.py",
       "source_commit": "6138703b9bf9700e46568af9b30bf16abdb99955",
