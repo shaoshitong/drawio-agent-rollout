@@ -41,9 +41,11 @@
   ],
   "sft": {
     "frameworks": [
-      "Transformers/TRL",
-      "AReaL SFT"
-    ]
+      "Unsloth"
+    ],
+    "model": "Qwen/Qwen3.5-9B",
+    "data": "teacher_trajectories_only",
+    "curriculum": "final_xml_vertices_plus_edges_ascending"
   },
   "rl": {
     "framework": "AReaL",

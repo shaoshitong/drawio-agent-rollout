@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+base=${DRAWIO_SFT_ROOT:?Set DRAWIO_SFT_ROOT to the remote experiment directory}
+runtime=${DRAWIO_BASE_RUNTIME:?Set DRAWIO_BASE_RUNTIME to the existing CUDA runtime environment file}
+source "$runtime"
+export PATH="$base/env/bin:$PATH"
+export PYTHONPATH="$(cd "$(dirname "$0")/.." && pwd)"
+export TMPDIR="$base/cache/tmp" XDG_CACHE_HOME="$base/cache"
+export HF_HOME="$base/cache/huggingface" HF_HUB_DISABLE_TELEMETRY=1
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+export TRITON_CACHE_DIR="$base/cache/triton" CUDA_CACHE_PATH="$base/cache/cuda"
+export TORCHINDUCTOR_CACHE_DIR="$base/cache/inductor" TORCH_EXTENSIONS_DIR="$base/cache/extensions"
+export NUMBA_CACHE_DIR="$base/cache/numba" TOKENIZERS_PARALLELISM=false
+export OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4
+export CUDA_VISIBLE_DEVICES=${DRAWIO_GPUS:-4}
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+mkdir -p "$TMPDIR"
+cd "$base"
+if [[ ${DRAWIO_PROCESSES:-1} -gt 1 ]]; then
+  exec -a python "$base/env/bin/python" -m torch.distributed.run --standalone \
+    --nproc_per_node="$DRAWIO_PROCESSES" --module sft.train_unsloth "$@"
+fi
+exec -a python "$base/env/bin/python" -m sft.train_unsloth "$@"

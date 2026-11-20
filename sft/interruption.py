@@ -5,7 +5,10 @@ import json
 from hashlib import sha256
 from pathlib import Path
 
-from store import canonical
+if __package__:
+    from .store import canonical
+else:
+    from store import canonical
 
 
 def native_unknown_results(root, episode, missing):

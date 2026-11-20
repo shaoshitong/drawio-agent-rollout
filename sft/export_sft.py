@@ -8,8 +8,12 @@ from io import BytesIO
 import json
 from pathlib import Path
 
-from store import Store
-from interruption import annotation
+if __package__:
+    from .store import Store
+    from .interruption import annotation
+else:
+    from store import Store
+    from interruption import annotation
 
 
 def encode_completion(tokenizer, prefix, full):

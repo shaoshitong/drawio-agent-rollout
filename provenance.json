@@ -22,7 +22,7 @@
     {
       "path": "configs/models.json",
       "source": "repository integration",
-      "sha256": "09e4e5fa609da2ba9f54e0653467ec4926590574ed86bc3345466a541e2ff4a7"
+      "sha256": "c3a848ee431302e5d6d9d3b08bfa6b3dadd5e2d0d83b8ffc22fcb7f05cbcfcfd"
     },
     {
       "path": "configs/validation.json",
@@ -529,7 +529,7 @@
       "source": "operations/teacher_trajectory/export_sft.py",
       "source_commit": "6138703b9bf9700e46568af9b30bf16abdb99955",
       "source_sha256": "ba53f3a8595ed5334c4b3f613a615464a0d7fb21b00a429c215aa9f79fc706d3",
-      "sha256": "f6dd540ca936248bfe43ea3b33236b41e984b0cf894a03fb742dcf3601036b46"
+      "sha256": "d7e52c3d93805487adabf867e2fb57ad28fffb4c5012d95906afb35338a5e975"
     },
     {
       "path": "sft/gateway.py",
@@ -543,7 +543,7 @@
       "source": "operations/teacher_trajectory/interruption.py",
       "source_commit": "6138703b9bf9700e46568af9b30bf16abdb99955",
       "source_sha256": "c4173f4f02decee099213ab116be84356452ed1302ace6b6884d695dfc5b0256",
-      "sha256": "c659e6388fc299389e980f3d2c70cbbe6bfd013f04cfbeeeca8c2fddbaba0f29"
+      "sha256": "1962810a33d32e072b08fb5c708e3aaf94428996f090ac105cfacfaab0462963"
     },
     {
       "path": "sft/one_rollout.py",
@@ -570,6 +570,46 @@
       "path": "test/replay.py",
       "source": "repository integration",
       "sha256": "9b2c25c794d7390a9050ef90411f2c0bf45744a83721d369596e38bbf14ae408"
+    },
+    {
+      "path": "configs/sft-9b.json",
+      "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
+      "sha256": "6dc5eb0521578430ac58a523093ca3d8efe7a8ae5699e79ffcf7b3beb87ccd8f"
+    },
+    {
+      "path": "scripts/fetch_model.py",
+      "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
+      "sha256": "bb1810285b135b9e72a98805501351b17828b543d1bd7256ea009e2666750ee4"
+    },
+    {
+      "path": "scripts/fetch_trajectories.py",
+      "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
+      "sha256": "bc8805e571c88de5836113a11a40f20e95e40057ca510c88e9e8c1bd39774a8e"
+    },
+    {
+      "path": "scripts/run_sft.sh",
+      "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
+      "sha256": "43c49f60e3bb6dcf6df2e29ba904d666e73bb5b8c890e80380f1c50476783890"
+    },
+    {
+      "path": "scripts/setup_unsloth.sh",
+      "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
+      "sha256": "917772e5d193e4e46d6765e5714160a2b66b58550ca86a5c329d52def84b0fbb"
+    },
+    {
+      "path": "sft/data.py",
+      "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
+      "sha256": "99fb00a74836b5f8ac8154b562e2a35f49bb7d42cc63cfdc33c50fb2e6af0bf8"
+    },
+    {
+      "path": "sft/prepare_trajectories.py",
+      "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
+      "sha256": "b5cdd1a37152628c5e43930a6059ad537b956a8b10220ba1c65ec364b6dfb3f1"
+    },
+    {
+      "path": "sft/train_unsloth.py",
+      "source": "Qwen3.5-9B trajectory-only Unsloth SFT integration",
+      "sha256": "fa90937d1c820096b76d6d6dc893817a6d35fac349e7fb90e2cd1a07f5000a24"
     }
   ]
 }
