@@ -625,6 +625,11 @@
       "path": "sft/evaluation.py",
       "source": "Qwen3.5-9B trajectory-only SFT runtime checks",
       "sha256": "a7b8e04f8a9e87f04a838937d67cc6f6235d376dfba720072f324d3b4fb0feee"
+    },
+    {
+      "path": "sft/monitor.py",
+      "source": "Read-only remote SFT progress observer",
+      "sha256": "a4bbf1ca027dc9db4c4fd16cb68b9b9195fbf7908c15ad91988aecf3224bce0a"
     }
   ]
 }
