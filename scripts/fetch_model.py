@@ -56,24 +56,29 @@ def main():
     parser.add_argument("--endpoint", default="https://hf-mirror.com")
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--modelscope-weights", action="store_true")
+    parser.add_argument("--verify-only", action="store_true", help="Verify existing files against the saved upstream manifest")
     args = parser.parse_args()
     address = f"{args.endpoint}/api/models/{args.model}/revision/{args.revision}?blobs=true"
-    with urlopen(address, timeout=30) as response:
-        metadata = json.load(response)
+    if args.verify_only:
+        metadata = json.loads((args.output / "source-manifest.json").read_text())
+    else:
+        with urlopen(address, timeout=30) as response:
+            metadata = json.load(response)
     assert metadata["sha"] == args.revision
     files = [row for row in metadata["siblings"] if row["rfilename"].endswith(
         (".json", ".jinja", ".txt", ".safetensors")) or row["rfilename"] == "LICENSE"]
     args.output.mkdir(parents=True, exist_ok=True)
-    (args.output / "source-manifest.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    print(json.dumps({"phase": "download", "revision": args.revision,
-                      "expected_bytes": sum(row["size"] for row in files)}), flush=True)
-    selected = [row["rfilename"] for row in files
-                if not args.modelscope_weights or not row["rfilename"].endswith(".safetensors")]
-    snapshot_download(args.model, revision=args.revision, endpoint=args.endpoint,
-                      local_dir=args.output, allow_patterns=selected,
-                      max_workers=args.workers, token=False)
-    if args.modelscope_weights:
-        modelscope_weights(args.model, args.output, files)
+    if not args.verify_only:
+        (args.output / "source-manifest.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        print(json.dumps({"phase": "download", "revision": args.revision,
+                          "expected_bytes": sum(row["size"] for row in files)}), flush=True)
+        selected = [row["rfilename"] for row in files
+                    if not args.modelscope_weights or not row["rfilename"].endswith(".safetensors")]
+        snapshot_download(args.model, revision=args.revision, endpoint=args.endpoint,
+                          local_dir=args.output, allow_patterns=selected,
+                          max_workers=args.workers, token=False)
+        if args.modelscope_weights:
+            modelscope_weights(args.model, args.output, files)
     for row in files:
         path = args.output / row["rfilename"]
         assert path.stat().st_size == row["size"], path.name
@@ -93,7 +98,8 @@ def main():
     receipt = {"model": args.model, "revision": args.revision, "files": len(files),
                "bytes": sum(row["size"] for row in files), "tensors": len(index),
                "all_upstream_hashes_verified": True, "verified_at": time.time()}
-    receipt["weights_transport"] = "modelscope-aria2" if args.modelscope_weights else args.endpoint
+    receipt["weights_transport"] = ("verified-existing-files" if args.verify_only
+                                    else "modelscope-aria2" if args.modelscope_weights else args.endpoint)
     (args.output / "verification-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt), flush=True)
 
