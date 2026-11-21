@@ -44,7 +44,7 @@ def run(args):
         "source_request": str(args.request.resolve()), "source_request_sha256": sha256(original_bytes).hexdigest(),
         "common_max_tokens": args.max_tokens, "model_path": str(args.model_path),
         "scope": "Same archived messages, images and tools; no target, hints or tool execution. "
-                 "Diagnostic output cap, not a full-rollout quality assessment."})
+                 "Single-decision output limit recorded above; not a full-rollout quality assessment."})
     server, log = start_model(args)
     results = {}
     try:
@@ -52,14 +52,15 @@ def run(args):
         opener = build_opener(ProxyHandler({}))
         conditions = {"greedy": {"temperature": 0.0}, "original": {},
                       "presence15": {"presence_penalty": 1.5}}
-        for name, change in conditions.items():
+        for name in args.conditions:
+            change = conditions[name]
             output = args.out / name
             output.mkdir()
             with opener.open(Request(f"http://127.0.0.1:{args.port}/flush_cache", method="POST"),
                              timeout=30) as response:
                 (output / "cache-flush.txt").write_bytes(response.read())
             body = dict(original, max_tokens=args.max_tokens, **change)
-            payload = json.dumps(body, ensure_ascii=False).encode()
+            payload = original_bytes if body == original else json.dumps(body, ensure_ascii=False).encode()
             (output / "request.json").write_bytes(payload)
             state = stream_request(f"http://127.0.0.1:{args.port}/v1/chat/completions",
                                    payload, output, None, args.timeout)
@@ -88,6 +89,8 @@ def main():
     parser.add_argument("--gpu", required=True)
     parser.add_argument("--port", type=int, default=32639)
     parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument("--conditions", nargs="+", choices=("greedy", "original", "presence15"),
+                        default=("greedy", "original", "presence15"))
     parser.add_argument("--timeout", type=int, default=1800)
     args = parser.parse_args()
     code = 1
