@@ -14,8 +14,13 @@ trap 'printf "%s\n" "$?" > "$output/exit-code"' EXIT
 
 for variant in $variants; do
     model=$base
-    if [[ $variant == merged ]]; then model=$merged; fi
+    if [[ $variant == merged || $variant == full ]]; then model=$merged; fi
     "$python_bin" -m sft.probe_parity harvest --base "$base" --model "$model" \
         --adapter "$adapter" --variant "$variant" --probes "$probes" --output "$output" --layer-progress "${extra_args[@]}"
 done
-"$python_bin" -m sft.probe_parity score --base "$base" --probes "$probes" --output "$output" "${extra_args[@]}"
+if [[ $variants == full ]]; then
+    "$python_bin" -m sft.probe_parity loss --base "$base" --model "$merged" --variant full \
+        --probes "$probes" --output "$output" "${extra_args[@]}"
+else
+    "$python_bin" -m sft.probe_parity score --base "$base" --probes "$probes" --output "$output" "${extra_args[@]}"
+fi

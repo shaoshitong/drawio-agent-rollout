@@ -69,6 +69,22 @@ def load_checkpoint(args):
     return processor, model, root
 
 
+def verify_saved_probe(path, row, target, prompt_tokens, width):
+    import torch
+    from safetensors import safe_open
+    from safetensors.torch import load_file
+
+    with safe_open(path, framework="pt", device="cpu") as source:
+        metadata = source.metadata()
+    state = load_file(path)
+    if (metadata["sample_id"] != row["sample_id"]
+            or int(metadata["prompt_tokens"]) != prompt_tokens
+            or not torch.equal(state["target"], target)):
+        raise ValueError("Saved probe does not match the unchanged validation decision")
+    if state["hidden"].shape != (len(target), width) or not torch.isfinite(state["hidden"]).all():
+        raise ValueError("Saved probe contains invalid prediction states")
+
+
 def harvest(args):
     import torch
     from safetensors.torch import save_file
@@ -81,9 +97,16 @@ def harvest(args):
             layer.register_forward_hook(lambda _module, _inputs, _output, index=index: print(json.dumps(
                 {"event": "layer_done", "variant": args.variant, "layer": index, "at": time.time()}), flush=True))
     directory = args.output / args.variant
-    directory.mkdir(parents=True, exist_ok=False)
+    directory.mkdir(parents=True, exist_ok=bool(args.start_index))
+    width = root.lm_head.weight.shape[1]
     head = root.lm_head.weight.detach().to(torch.bfloat16).contiguous().view(torch.uint8).cpu()
-    (directory / "head-sha256.txt").write_text(hashlib.sha256(head.numpy().tobytes()).hexdigest() + "\n")
+    digest = hashlib.sha256(head.numpy().tobytes()).hexdigest()
+    head_path = directory / "head-sha256.txt"
+    if args.start_index:
+        if head_path.read_text().strip() != digest:
+            raise ValueError("Resume head differs from the saved checkpoint head")
+    else:
+        head_path.write_text(digest + "\n")
     del head
     if args.offload_layers:
         from accelerate import cpu_offload_with_hook
@@ -96,6 +119,14 @@ def harvest(args):
     rows = [json.loads(line) for line in (args.probes / "probes.jsonl").read_text().splitlines()]
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         for index, row in enumerate(rows):
+            path = directory / f"{index:03}.safetensors"
+            if index < args.start_index:
+                target = processor(text=[row["completion"]], add_special_tokens=False,
+                                   return_tensors="pt")["input_ids"][0]
+                verify_saved_probe(path, row, target, row["sequence_tokens"] - len(target), width)
+                print(json.dumps({"event": "probe_reused", "sample_id": row["sample_id"],
+                                  "index": index, "at": time.time()}), flush=True)
+                continue
             torch.cuda.reset_peak_memory_stats()
             batch, target, prompt_tokens = native_batch(processor, row, args.probes)
             batch = {key: value.to("cuda") for key, value in batch.items()}
@@ -107,8 +138,10 @@ def harvest(args):
             hidden = result.last_hidden_state[0, prompt_tokens - 1:-1].contiguous().cpu()
             if len(hidden) != len(target) or not torch.isfinite(hidden).all():
                 raise ValueError("Masked prediction states differ from shifted target positions")
-            save_file({"hidden": hidden, "target": target}, directory / f"{index:03}.safetensors",
+            temporary = path.with_suffix(".safetensors.tmp")
+            save_file({"hidden": hidden, "target": target}, temporary,
                       metadata={"sample_id": row["sample_id"], "prompt_tokens": str(prompt_tokens)})
+            temporary.replace(path)
             del result, hidden, batch
             progress = {"variant": args.variant, "completed_probes": index + 1, "total_probes": len(rows),
                         "last_sample_id": row["sample_id"], "at": time.time(),
@@ -251,12 +284,16 @@ def main():
     parser.add_argument("--adapter", type=Path)
     parser.add_argument("--variant", choices=("base", "peft", "merged", "full"))
     parser.add_argument("--layer-progress", action="store_true")
+    parser.add_argument("--start-index", type=int, default=0,
+                        help="Resume the same experiment after validating earlier saved probes")
     parser.add_argument("--offload-layers", action="store_true",
                         help="Move decoder weights between CPU and CUDA without changing native prefixes")
     parser.add_argument("--per-probe", action="store_true", help="Also report each unchanged target decision separately")
     parser.add_argument("--reference-base", type=Path,
                         help="Also score preserved baseline states from the original Conv3d projection")
     args = parser.parse_args()
+    if args.start_index < 0:
+        parser.error("--start-index must be nonnegative")
     {"harvest": harvest, "score": scores, "loss": score_loss}[args.mode](args)
 
 
