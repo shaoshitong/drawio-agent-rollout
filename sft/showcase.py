@@ -108,10 +108,11 @@ def build_report(args):
     report["loss"] = {"groups": metrics, "overall": {name: {k: v for k, v in value.items() if k != "per_probe"}
                                                      for name, value in variants.items()}}
     report["training"] = json.loads(args.training.read_text())
-    report["renders"] = json.loads((args.media / "renders.json").read_text())
-    report["media"] = {name: "data:image/png;base64," + base64.b64encode((args.media / f"{name}.png").read_bytes()).decode()
-                       for name in ("reference", "capture", "replay", "base")}
-    report["xml"] = {name: (args.media / f"{name}.drawio").read_text() for name in ("capture", "replay", "base")}
+    if not args.data_only:
+        report["renders"] = json.loads((args.media / "renders.json").read_text())
+        report["media"] = {name: "data:image/png;base64," + base64.b64encode((args.media / f"{name}.png").read_bytes()).decode()
+                           for name in ("reference", "capture", "replay", "base")}
+        report["xml"] = {name: (args.media / f"{name}.drawio").read_text() for name in ("capture", "replay", "base")}
     payload = json.dumps(report, ensure_ascii=False).replace("<", "\\u003c")
     template = Path(__file__).with_suffix(".html").read_text()
     args.output.write_text(template.replace("__REPORT_DATA__", payload))
@@ -122,6 +123,7 @@ def build_report(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("export", "report"))
+    parser.add_argument("--data-only", action="store_true", help="Show training data and losses without model renders")
     for name in ("manifest", "model", "probe-ids", "examples", "loss", "media", "training", "output"):
         parser.add_argument("--" + name, type=Path, required=name == "output")
     args = parser.parse_args()

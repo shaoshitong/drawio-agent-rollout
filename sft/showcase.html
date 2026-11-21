@@ -33,8 +33,10 @@ const fmt=(n,p=4)=>n===null||n===undefined?'无样本':Number(n).toFixed(p);
 function metric(root,label,value){const x=el('div',undefined,'metric');x.append(el('b',value),el('span',label));root.append(x)}
 function zoom(src){document.getElementById('zoom-image').src=src;document.getElementById('zoom').showModal()}
 document.getElementById('close-zoom').onclick=()=>document.getElementById('zoom').close();
+if(d.media){
 document.querySelectorAll('[data-media]').forEach(x=>{x.src=d.media[x.dataset.media];x.onclick=()=>zoom(x.src)});
 for(const [name,label] of [['capture','LoRA中间产物 XML'],['replay','完整预算重放 XML'],['base','Base旧结果 XML']]){const a=el('a',label,'download');a.href=URL.createObjectURL(new Blob([d.xml[name]],{type:'application/xml'}));a.download=name+'.drawio';document.getElementById('xml-links').append(a)}
+}else{document.getElementById('renders').remove();document.querySelector('a[href="#renders"]').remove()}
 const tm=document.getElementById('training-metrics');metric(tm,'已完成全局 optimizer 更新',d.training.observed_optimizer_updates+' / '+d.training.total_optimizer_updates);metric(tm,'全参阶段已完成更新',d.training.observed_optimizer_updates-35);metric(tm,'训练状态',d.training.launcher_live&&d.training.exit_code===null?'运行中':'需检查');metric(tm,'已保存',d.training.checkpoints.join(' / '));
 document.getElementById('training-detail').textContent='实测时间：'+new Date(d.training.at*1000).toISOString()+'。4个worker同源运行；最近状态：'+d.training.workers.map(x=>'pid '+x.pid+' / micro '+x.step+' / '+x.phase).join('；')+'。';
 for(const row of d.loss.groups){const tr=el('tr');const cells=[names[row.category],row.decisions,row.tokens,fmt(row.ce.base),fmt(row.ce.peft),fmt(row.drop),row.relative_drop===null?'无样本':fmt(100*row.relative_drop,2)+'%'];cells.forEach((v,i)=>tr.append(el('td',v,i>=5?(row.drop>=0?'positive':'negative'):undefined)));document.getElementById('loss-rows').append(tr)}
