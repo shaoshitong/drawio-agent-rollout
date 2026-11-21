@@ -77,7 +77,7 @@ def relay(args):
     proxies = {"http": args.metadata_proxy, "https": args.metadata_proxy}
     with subprocess.Popen(args.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True) as child:
         if token:
-            child.stdin.write(token)
+            child.stdin.write(token.rstrip("\r\n") + "\n")
             child.stdin.flush()
             token = ""
         for line in child.stdout:

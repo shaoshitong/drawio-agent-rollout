@@ -119,9 +119,23 @@ def audit_target(model, processor, example, ids, labels, image_tokens, max_lengt
     }
 
 
-def parameter_audit(model, target_modules):
+def parameter_audit(model, target_modules, full=False):
     trainable = [(name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad]
     visual = [name for name, _ in trainable if "visual" in name or "merger" in name]
+    if full:
+        import torch
+        from .full_finetune import parameter_group
+
+        groups = Counter()
+        for name, parameter in trainable:
+            groups[parameter_group(name)] += parameter.numel()
+        if set(groups) != {"vision", "merger", "embedding", "head", "language"}:
+            raise ValueError(f"Full finetuning is missing active parameter groups: {groups}")
+        if any(parameter.dtype != torch.float32 for _, parameter in trainable):
+            raise ValueError("Full finetuning requires FP32 master parameters")
+        return {"trainable_parameters": sum(groups.values()), "parameter_groups": dict(groups),
+                "master_dtype": "float32", "frozen_names": [name for name, p in model.named_parameters()
+                                                               if not p.requires_grad]}
     coverage = {suffix: sum(f".{suffix}." in name for name, _ in trainable) for suffix in target_modules}
     if visual or not all(coverage.values()):
         raise ValueError(f"LoRA scope mismatch: visual={visual}, projection coverage={coverage}")
@@ -134,7 +148,7 @@ def parameter_audit(model, target_modules):
     }
 
 
-def adapter_hash(model):
+def trainable_hash(model):
     import torch
 
     digest, tensors, parameters = hashlib.sha256(), 0, 0
@@ -142,10 +156,12 @@ def adapter_hash(model):
         if not parameter.requires_grad:
             continue
         digest.update(f"{name}:{parameter.dtype}:{tuple(parameter.shape)}\n".encode())
-        digest.update(parameter.detach().contiguous().view(torch.uint8).cpu().numpy().tobytes())
+        local = parameter.to_local() if hasattr(parameter, "to_local") else parameter
+        digest.update(local.detach().contiguous().view(torch.uint8).cpu().numpy().tobytes())
         tensors += 1
         parameters += parameter.numel()
-    return {"sha256": digest.hexdigest(), "tensors": tensors, "parameters": parameters}
+    return {"sha256": digest.hexdigest(), "tensors": tensors, "parameters": parameters,
+            "scope": "rank-local trainable storage (shards for FSDP2)"}
 
 
 def make_collator(model, processor, examples, config, output):
@@ -165,6 +181,10 @@ def make_collator(model, processor, examples, config, output):
                 raise
             self.audited_batches += 1
             self.audited_examples += len(materialized)
+            if getattr(self, "record_batches", False):
+                path = output / f"batches-rank-{os.environ.get('RANK', '0')}.jsonl"
+                with path.open("a") as stream:
+                    stream.write(json.dumps({"batch": self.audited_batches, "samples": self.last_report}) + "\n")
             if self.audited_batches % 25 == 0:
                 write_json(output / "runtime-audit.json", self.audit_progress())
             return batch
@@ -188,9 +208,12 @@ def setup(config):
     import torch
 
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
+    full = config.get("full_finetuning", False)
     model, processor = FastVisionModel.from_pretrained(
         model_name=config["model_name"], max_seq_length=config["max_seq_length"],
-        dtype=torch.bfloat16, load_in_4bit=False, load_in_16bit=True,
+        dtype=torch.float32 if full else torch.bfloat16, load_in_4bit=False, load_in_16bit=True,
+        **({"full_finetuning": True, "float32_mixed_precision": True,
+            "use_gradient_checkpointing": "unsloth", "attn_implementation": "sdpa"} if full else {}),
         device_map={"": int(os.environ.get("LOCAL_RANK", "0"))},
     )
     existing = {name.rsplit(".", 1)[-1] for name, module in model.named_modules()
@@ -199,13 +222,14 @@ def setup(config):
     if not any(name.startswith("in_proj_") for name in targets) or "out_proj" not in targets:
         raise ValueError("Configured LoRA targets do not cover the loaded GatedDeltaNet projections")
     config["resolved_target_modules"] = targets
-    model = FastVisionModel.get_peft_model(
-        model, r=config["lora_rank"], lora_alpha=config["lora_alpha"],
-        lora_dropout=0, bias="none", target_modules=targets,
-        finetune_vision_layers=False, finetune_language_layers=True,
-        finetune_attention_modules=True, finetune_mlp_modules=True,
-        use_gradient_checkpointing="unsloth", random_state=config["seed"],
-    )
+    if not full:
+        model = FastVisionModel.get_peft_model(
+            model, r=config["lora_rank"], lora_alpha=config["lora_alpha"],
+            lora_dropout=0, bias="none", target_modules=targets,
+            finetune_vision_layers=False, finetune_language_layers=True,
+            finetune_attention_modules=True, finetune_mlp_modules=True,
+            use_gradient_checkpointing="unsloth", random_state=config["seed"],
+        )
     FastVisionModel.for_training(model)
     # Each input to this projection is exactly one non-overlapping image patch.
     # Linear uses the same weights without the pathological eager Conv3d path.
@@ -264,7 +288,7 @@ def preflight(config, model, processor, examples, collator, output):
         "status": "running", "config": config, "versions": versions,
         "manifest_sha256": hashlib.sha256(Path(config["manifest"]).read_bytes()).hexdigest(),
         "collator_source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
-        "parameters": parameter_audit(model, config["resolved_target_modules"]),
+        "parameters": parameter_audit(model, config["resolved_target_modules"], config.get("full_finetuning", False)),
         "samples": [], "runtime_only": True,
     }
     selected, strata = preflight_indices(examples, config["preflight_samples"])
@@ -339,6 +363,8 @@ def train(config, model, processor, examples, collator, output):
     from transformers import TrainerCallback
 
     order, plan = curriculum_order(examples, config, int(os.environ.get("WORLD_SIZE", "1")))
+    if config.get("gate_indices"):
+        order = config["gate_indices"]
     if config.get("resume_from_checkpoint"):
         previous = json.loads((Path(config["resume_from_checkpoint"]).parent / "curriculum-order.json").read_text())
         if previous["source_indices_sha256"] != plan["source_indices_sha256"]:
@@ -350,6 +376,7 @@ def train(config, model, processor, examples, collator, output):
             return order
 
         def log(self, logs, *args, **kwargs):
+            logs["step"] = self.state.global_step
             for key in ("loss", "train_loss", "grad_norm"):
                 if key in logs and not math.isfinite(float(logs[key])):
                     raise FloatingPointError(f"Non-finite training metric: {key}={logs[key]}")
@@ -363,7 +390,7 @@ def train(config, model, processor, examples, collator, output):
 
             torch.cuda.reset_peak_memory_stats()
             if state.is_world_process_zero:
-                evidence.update(initial=adapter_hash(trainer.accelerator.unwrap_model(trainer.model)),
+                evidence.update(initial=trainable_hash(trainer.accelerator.unwrap_model(trainer.model)),
                                 initial_global_step=state.global_step,
                                 loss_runtime={
                                     "model_accepts_loss_kwargs": trainer.model_accepts_loss_kwargs,
@@ -380,9 +407,9 @@ def train(config, model, processor, examples, collator, output):
             # Warmup can intentionally give the first optimizer step zero learning rate.
             if not any(rate != 0 for rate in rates):
                 return
-            current = adapter_hash(trainer.accelerator.unwrap_model(trainer.model))
+            current = trainable_hash(trainer.accelerator.unwrap_model(trainer.model))
             if current["sha256"] == evidence["initial"]["sha256"]:
-                raise RuntimeError("A nonzero-LR optimizer step did not change trainable adapter weights")
+                raise RuntimeError("A nonzero-LR optimizer step did not change trainable weights")
             evidence.update(first_update=current, first_update_step=state.global_step + 1,
                             first_update_learning_rates=rates)
             write_json(output / "adapter-update.json", evidence)
@@ -397,11 +424,11 @@ def train(config, model, processor, examples, collator, output):
                 "global_step": state.global_step,
             }, indent=2) + "\n")
             if state.is_world_process_zero:
-                evidence.update(final=adapter_hash(trainer.accelerator.unwrap_model(trainer.model)),
+                evidence.update(final=trainable_hash(trainer.accelerator.unwrap_model(trainer.model)),
                                 final_global_step=state.global_step)
                 write_json(output / "adapter-update.json", evidence)
                 if "first_update" not in evidence:
-                    raise RuntimeError("Training ended without an observed adapter optimizer update")
+                    raise RuntimeError("Training ended without an observed optimizer update")
 
     dataset = Dataset.from_dict({"row_index": list(range(len(examples)))})
     args = SFTConfig(
@@ -419,10 +446,19 @@ def train(config, model, processor, examples, collator, output):
         save_strategy="steps", save_steps=config["save_steps"], save_total_limit=2,
         save_only_model=False, gradient_checkpointing=True, ddp_find_unused_parameters=False,
     )
-    trainer = CurriculumTrainer(
+    trainer_class = CurriculumTrainer
+    if config.get("full_finetuning"):
+        from .full_finetune import FullFinetuneTrainer
+
+        trainer_class = type("FullCurriculumTrainer", (FullFinetuneTrainer, CurriculumTrainer), {"full_config": config})
+    trainer = trainer_class(
         model=model, processing_class=processor, train_dataset=dataset,
         data_collator=collator, args=args, callbacks=[UpdateEvidence()],
     )
+    if config.get("full_finetuning"):
+        # The fused Qwen forward consumes this count, but the bare HF model
+        # declares False. Set the Trainer flag after all Unsloth init patches.
+        trainer.model_accepts_loss_kwargs = True
     # Apply after Unsloth initializes its compiler defaults. Runtime tuning
     # synchronizes all streams and can wait on another rank's DDP reduction.
     if args.world_size > 1:
@@ -431,6 +467,10 @@ def train(config, model, processor, examples, collator, output):
         inductor_config.triton.autotune_pointwise = False
         inductor_config.dynamic_scale_rblock = False
     trainer.curriculum_plan = plan
+    if config.get("full_finetuning"):
+        from .full_finetune import make_full_callback
+
+        trainer.add_callback(make_full_callback(trainer, config, output))
     if config.get("evaluation_enabled", True):
         from .evaluation import make_evaluation_callback
 
@@ -443,9 +483,11 @@ def train(config, model, processor, examples, collator, output):
             train_samples=config["train_probe_samples"],
         ))
     collator.audited_batches = collator.audited_examples = 0
+    collator.record_batches = config.get("full_finetuning", False)
     result = trainer.train(resume_from_checkpoint=config.get("resume_from_checkpoint"))
     # A short explicit smoke run also needs optimizer and RNG state, even before save_steps.
-    trainer._save_checkpoint(trainer.model, trial=None)
+    if not (output / f"checkpoint-{trainer.state.global_step}" / "trainer_state.json").is_file():
+        trainer._save_checkpoint(trainer.model, trial=None)
     trainer.save_model(str(output / "final"))
     if trainer.state.is_world_process_zero:
         processor.save_pretrained(output / "final")
@@ -496,17 +538,28 @@ def main():
                      "lora_rank", "lora_alpha", "target_modules",
                      "batch_size", "gradient_accumulation_steps", "difficulty_stages", "sampler_policy", "seed",
                      "lr_scheduler_type", "learning_rate", "warmup_ratio", "max_grad_norm")}
+        if config.get("full_finetuning"):
+            identity["full_phase"] = {key: config[key] for key in
+                                      ("phase_start_step", "phase_total_updates", "phase_warmup_updates",
+                                       "phase_decay_updates", "phase_min_lr_ratio", "vision_lr_ratio")}
         identity["world_size"] = int(os.environ.get("WORLD_SIZE", "1"))
         identity["manifest_sha256"] = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
         if config.get("resume_from_checkpoint"):
             checkpoint = Path(config["resume_from_checkpoint"])
-            if json.loads((checkpoint.parent / "training-input.json").read_text()) != identity:
+            bridge = config.get("full_finetuning") and checkpoint.resolve() == Path(config["bridge_checkpoint"]).resolve()
+            previous = json.loads((checkpoint.parent / "training-input.json").read_text())
+            immutable = ("split", "max_seq_length", "batch_size", "gradient_accumulation_steps", "difficulty_stages",
+                         "sampler_policy", "seed", "world_size", "manifest_sha256", "num_train_epochs", "max_steps")
+            if (any(previous[key] != identity[key] for key in immutable) if bridge else previous != identity):
                 raise ValueError("Resume input or LoRA scope differs from the saved curriculum")
-            required = ("optimizer.pt", "scheduler.pt", "trainer_state.json")
+            required = ("trainer_state.json",) if bridge else ("scheduler.pt", "trainer_state.json")
             world_size = int(os.environ.get("WORLD_SIZE", "1"))
             rng = ["rng_state.pth"] if world_size == 1 else [f"rng_state_{rank}.pth" for rank in range(world_size)]
             if not all((checkpoint / name).is_file() for name in (*required, *rng)):
                 raise ValueError("Resume requires a complete optimizer, scheduler, trainer and RNG checkpoint")
+            if not bridge and not ((checkpoint / "optimizer.pt").is_file() or
+                                   (checkpoint / "optimizer_dcp").is_dir()):
+                raise ValueError("Resume optimizer state is missing")
         write_json(output / "training-input.json", identity)
     write_json(output / "runtime-config.json", config)
     model, processor, examples, collator = setup(config)

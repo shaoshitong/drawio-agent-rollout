@@ -54,6 +54,8 @@ def snapshot(run, log, py_spy):
     observed = [int(step) for step in re.findall(rf"(\d+)/{total}\b", text)] if total else []
     baseline = read_json(run / "fixed-loss/baseline.json")
     exit_path = run / "exit-status.txt"
+    if not exit_path.exists():
+        exit_path = run / "exit-status"
     exit_code = int(exit_path.read_text().strip()) if exit_path.exists() else None
     state = read_json(run / "trainer_state.json")
     update = read_json(run / "adapter-update.json")
@@ -63,7 +65,7 @@ def snapshot(run, log, py_spy):
             for pid in children(child):
                 workers.append(worker_status(pid, py_spy))
     return {
-        "at": time.time(), "run": str(run), "source_commit": launch["source_commit"],
+        "at": time.time(), "run": str(run), "source_commit": launch.get("source_commit", "unpublished"),
         "launcher_live": live, "exit_code": exit_code, "total_optimizer_updates": total,
         "observed_optimizer_updates": max([0, state.get("global_step", 0), *observed]),
         "workers": workers,
