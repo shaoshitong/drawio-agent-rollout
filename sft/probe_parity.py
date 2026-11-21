@@ -242,6 +242,11 @@ def score_loss(args):
     from safetensors import safe_open
     from safetensors.torch import load_file
 
+    end_id = None
+    if args.end_token_metrics:
+        from transformers import AutoTokenizer
+
+        end_id = AutoTokenizer.from_pretrained(args.base, local_files_only=True).convert_tokens_to_ids("<|im_end|>")
     checkpoint = args.model or args.base
     head = checkpoint_head(checkpoint)
     digest = hashlib.sha256(head.view(torch.uint8).numpy().tobytes()).hexdigest()
@@ -259,12 +264,21 @@ def score_loss(args):
                     raise ValueError("Harvested decision does not match the fixed probe")
             state = load_file(path)
             target, loss = state["target"], 0.0
+            endings = []
             for start in range(0, len(target), 128):
                 hidden = state["hidden"][start:start + 128].to("cuda")
                 ids = target[start:start + 128].to("cuda")
                 logp = functional.log_softmax(functional.linear(hidden, head).float(), dim=-1)
                 loss += float(-logp.gather(1, ids[:, None])[:, 0].double().sum())
-            records.append({"sample_id": row["sample_id"], "tokens": len(target), "ce": loss / len(target)})
+                if end_id is not None:
+                    mask = ids.eq(end_id)
+                    endings.extend({"position": start + int(position), "probability": float(logp[position, end_id].exp()),
+                                    "top1": int(logp[position].argmax()) == end_id}
+                                   for position in mask.nonzero().flatten())
+            record = {"sample_id": row["sample_id"], "tokens": len(target), "ce": loss / len(target)}
+            if end_id is not None:
+                record["end_of_turn"] = endings
+            records.append(record)
             total_loss += loss
             total_tokens += len(target)
     report = {"variant": args.variant, "checkpoint": str(checkpoint), "head_sha256": digest,
@@ -274,6 +288,8 @@ def score_loss(args):
               "decision_macro_ce": sum(row["ce"] for row in records) / len(records),
               "per_probe": records, "all_native_prefixes_preserved": True,
               "scope": "Fixed masked targets with this checkpoint's own output head; no rollout quality claim"}
+    if end_id is not None:
+        report["end_token_scope"] = "End-of-turn probabilities at teacher-forced target positions; not free-generation stopping accuracy"
     (args.output / f"loss-{args.variant}.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({key: value for key, value in report.items() if key != "per_probe"}), flush=True)
 
@@ -296,6 +312,8 @@ def main():
     parser.add_argument("--offload-layers", action="store_true",
                         help="Move decoder weights between CPU and CUDA without changing native prefixes")
     parser.add_argument("--per-probe", action="store_true", help="Also report each unchanged target decision separately")
+    parser.add_argument("--end-token-metrics", action="store_true",
+                        help="Report end-of-turn probabilities under unchanged teacher-forced prefixes")
     parser.add_argument("--reference-base", type=Path,
                         help="Also score preserved baseline states from the original Conv3d projection")
     args = parser.parse_args()
