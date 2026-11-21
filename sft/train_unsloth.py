@@ -58,6 +58,20 @@ def render_completion(processor, example):
     return prompt, full[len(prompt):]
 
 
+def patch_projection(self, inputs, weight, bias):
+    import torch.nn.functional as functional
+
+    values = functional.linear(inputs.flatten(1), weight.flatten(1), bias)
+    return values[:, :, None, None, None]
+
+
+def use_linear_patch_embedding(model):
+    # Each input is exactly one non-overlapping image patch, as in training.
+    projection = next(module.proj for module in model.modules()
+                      if type(module).__name__ == "Qwen3_5VisionPatchEmbed")
+    projection._conv_forward = MethodType(patch_projection, projection)
+
+
 def audit_batch(model, processor, examples, batch, max_length):
     attention = batch["attention_mask"].bool()
     if not batch["labels"][~attention].eq(-100).all():
@@ -231,18 +245,7 @@ def setup(config):
             use_gradient_checkpointing="unsloth", random_state=config["seed"],
         )
     FastVisionModel.for_training(model)
-    # Each input to this projection is exactly one non-overlapping image patch.
-    # Linear uses the same weights without the pathological eager Conv3d path.
-    projection = next(module.proj for module in model.modules()
-                      if type(module).__name__ == "Qwen3_5VisionPatchEmbed")
-
-    def patch_projection(self, inputs, weight, bias):
-        import torch.nn.functional as functional
-
-        values = functional.linear(inputs.flatten(1), weight.flatten(1), bias)
-        return values[:, :, None, None, None]
-
-    projection._conv_forward = MethodType(patch_projection, projection)
+    use_linear_patch_embedding(model)
     examples = Examples(config["manifest"], config["split"], config["enable_thinking"],
                         config.get("max_train_samples"))
     collator = make_collator(model, processor, examples, config, Path(config["output"]))

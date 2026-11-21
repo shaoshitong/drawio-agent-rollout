@@ -11,6 +11,7 @@ import sys
 import time
 
 from .data import token_sha256
+from .train_unsloth import use_linear_patch_embedding
 
 
 def native_batch(processor, row, directory):
@@ -57,6 +58,7 @@ def harvest(args):
                                                    for key, value in expected.items()):
             raise ValueError("Not every saved LoRA tensor was loaded exactly")
     model.eval()
+    use_linear_patch_embedding(model)
     root = model.get_base_model() if args.variant == "peft" else model
     if args.layer_progress:
         for index, layer in enumerate(root.model.language_model.layers):
