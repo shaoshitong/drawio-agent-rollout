@@ -5,6 +5,7 @@ import base64
 from hashlib import sha256
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import count
 import json
 from pathlib import Path
 import time
@@ -63,6 +64,7 @@ class Proxy(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         data = json.loads(body)
         record = {
+            "request_number": next(self.server.request_counter),
             "timestamp": time.time(),
             "path": self.path,
             "model": data.get("model"),
@@ -96,6 +98,22 @@ class Proxy(BaseHTTPRequestHandler):
             capture = (directory / (name + ".response.bin")).open("wb")
         with self.server.audit.open("a") as log:
             log.write(json.dumps(record) + "\n")
+        if self.server.request_limit and record["request_number"] > self.server.request_limit:
+            self.server.limit_reached = True
+            payload = json.dumps({"error": {"type": "diagnostic_capture_limit",
+                "message": "Host diagnostic request limit reached; this is not a completed rollout."}}).encode()
+            if capture:
+                capture.write(payload)
+                capture.close()
+            with self.server.audit.open("a") as log:
+                log.write(json.dumps({"response_to": record["timestamp"], "status": 429,
+                                      "host_diagnostic_limit": True}) + "\n")
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         upstream = HTTPConnection(self.server.upstream.hostname, self.server.upstream.port, timeout=900)
         upstream.request("POST", self.path, body, {"Content-Type": "application/json"})
         response = upstream.getresponse()
@@ -146,11 +164,13 @@ def main():
     parser.add_argument("--upstream", required=True)
     parser.add_argument("--audit", required=True, type=Path)
     parser.add_argument("--capture-raw", action="store_true")
+    parser.add_argument("--request-limit", type=int, default=0)
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Proxy)
     server.upstream = urlsplit(args.upstream)
     server.audit = args.audit
     server.capture_raw = args.capture_raw
+    server.request_counter, server.request_limit, server.limit_reached = count(1), args.request_limit, False
     server.serve_forever()
 
 

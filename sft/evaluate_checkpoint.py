@@ -45,32 +45,51 @@ def start_model(args):
     return process, log
 
 
-def reconstruct(args, key):
+def stop_model(server, log):
+    if server.poll() is None:
+        os.killpg(server.pid, signal.SIGTERM)
+        try:
+            server.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            os.killpg(server.pid, signal.SIGKILL)
+            server.wait()
+    log.close()
+
+
+def prepare_case(args):
     case = args.out / "case"
     case.mkdir()
     shutil.copyfile(args.reference, case / "reference.png")
     skill = case / ".agents/skills/drawio-reconstruction"
     skill.mkdir(parents=True)
     shutil.copyfile(HERE.parent / "rollout/reconstruction_skill.txt", skill / "SKILL.md")
+    return case
+
+
+def evaluation_config(args, reviewer_url="", reviewer_auth=None):
+    return SimpleNamespace(out=args.out, runtime=args.root / "runtime",
+        render_runtime=args.root / "renderer", renderer_python=args.root / "renderer/venv/bin/python",
+        python_runtime_root=Path(sys.base_prefix),
+        extra_runtime_mounts=list(dict.fromkeys((Path(sys.prefix), Path(sys.prefix).resolve()))),
+        generator_model="Qwen/Qwen3.5-9B", reviewer_model="deepseek-flash",
+        generator_url=f"http://127.0.0.1:{args.port}/v1",
+        reviewer_url=reviewer_url, generator_auth_file=None, reviewer_auth_file=reviewer_auth,
+        context_window=262144, reviewer_context_window=1048576, max_tokens=131072,
+        reasoning_effort="high", preserve_thinking=False, qwen38_effort="xhigh",
+        sampling_preset="precise-coding", reviewer_sampling_preset="model", seed=42,
+        rounds=2, skill_mode="full", single_self_review=True, seeded=False,
+        resume=True, resume_note="", compaction_headroom_tokens=None, turn_timeout=21600)
+
+
+def reconstruct(args, key):
+    case = prepare_case(args)
     store = Store(args.out / "reviewer-archive")
     token = secrets.token_urlsafe(32)
     auth = args.out / "reviewer-auth.json"
     with os.fdopen(os.open(auth, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
         json.dump({"headers": {"Authorization": "Bearer " + token}}, stream)
     reviewer = gateway(store, Provider(key), args.out.name, "reviewer", case, token, 12, 12)
-    config = SimpleNamespace(out=args.out, runtime=args.root / "runtime",
-        render_runtime=args.root / "renderer", renderer_python=args.root / "renderer/venv/bin/python",
-        python_runtime_root=Path(sys.base_prefix),
-        extra_runtime_mounts=list(dict.fromkeys((Path(sys.prefix), Path(sys.prefix).resolve()))),
-        generator_model="Qwen/Qwen3.5-9B", reviewer_model="deepseek-flash",
-        generator_url=f"http://127.0.0.1:{args.port}/v1",
-        reviewer_url=f"http://127.0.0.1:{reviewer.server_port}/v1",
-        generator_auth_file=None, reviewer_auth_file=auth,
-        context_window=262144, reviewer_context_window=1048576, max_tokens=131072,
-        reasoning_effort="high", preserve_thinking=False, qwen38_effort="xhigh",
-        sampling_preset="precise-coding", reviewer_sampling_preset="model", seed=42,
-        rounds=2, skill_mode="full", single_self_review=True, seeded=False,
-        resume=True, resume_note="", compaction_headroom_tokens=None, turn_timeout=21600)
+    config = evaluation_config(args, f"http://127.0.0.1:{reviewer.server_port}/v1", auth)
     protocol = {"source_commit": args.source_commit, "model_path": str(args.model_path),
         "generator": config.generator_model, "reviewer": config.reviewer_model,
         "generator_context": config.context_window, "generator_max_output": config.max_tokens,
@@ -144,14 +163,7 @@ def main():
         save(args.out / "failure.json", {"type": type(error).__name__, "message": str(error), "at": time.time()})
         raise
     finally:
-        if server.poll() is None:
-            os.killpg(server.pid, signal.SIGTERM)
-            try:
-                server.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                os.killpg(server.pid, signal.SIGKILL)
-                server.wait()
-        log.close()
+        stop_model(server, log)
 
 
 if __name__ == "__main__":
