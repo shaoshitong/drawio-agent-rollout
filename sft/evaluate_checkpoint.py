@@ -40,7 +40,8 @@ def start_model(args):
     save(args.out / "server-command.json", command)
     log = (args.out / "server.log").open("wb")
     process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True,
-        env=dict(os.environ, CUDA_VISIBLE_DEVICES=args.gpu, HF_HUB_OFFLINE="1",
+        env=dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+                 CUDA_VISIBLE_DEVICES=args.gpu, HF_HUB_OFFLINE="1",
                  TRANSFORMERS_OFFLINE="1", OMP_NUM_THREADS="4", TOKENIZERS_PARALLELISM="false"))
     return process, log
 
