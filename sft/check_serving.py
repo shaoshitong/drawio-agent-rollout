@@ -39,26 +39,38 @@ def tensor_record(tensor):
 
 
 def prefixes(args):
+    import torch
+    from PIL import Image
+
     processor = processor_for(args.model)
-    dataset = ManifestDataset(args.manifest)
+    dataset = ([json.loads(line) for line in (args.probes / "probes.jsonl").read_text().splitlines()]
+               if args.probes else ManifestDataset(args.manifest))
     report = {"mode": "cpu_prefixes", "transformers": importlib.metadata.version("transformers"),
-              "processor": type(processor).__name__, "model": str(args.model), "samples": []}
+              "processor": type(processor).__name__, "image_processor": type(processor.image_processor).__name__,
+              "model": str(args.model), "samples": []}
     started = time.monotonic()
     for index in range(min(args.limit, len(dataset)) if args.limit else len(dataset)):
         sample = dataset[index]
-        kwargs = {"enable_thinking": True, **sample["chat_template_kwargs"]}
-        prefix = processor.apply_chat_template(sample["prompt"], tokenize=False,
-                                               add_generation_prompt=True, **kwargs)
+        if args.probes:
+            prefix = sample["prompt"]
+            images = [Image.open(args.probes / name).convert("RGB") for name in sample["images"]]
+        else:
+            kwargs = {"enable_thinking": True, **sample["chat_template_kwargs"]}
+            prefix = processor.apply_chat_template(sample["prompt"], tokenize=False,
+                                                   add_generation_prompt=True, **kwargs)
+            images = sample["images"]
         inputs = {"text": [prefix], "add_special_tokens": False, "truncation": False,
                   "padding": False, "return_tensors": "pt"}
-        if sample["images"]:
-            inputs["images"] = sample["images"]
+        if images:
+            inputs["images"] = images
         batch = processor(**inputs)
-        record = {"sample_id": sample["sample_id"], "images": len(sample["images"]),
+        record = {"sample_id": sample["sample_id"], "images": len(images),
                   "prefix_text_sha256": hashlib.sha256(prefix.encode()).hexdigest(),
                   "prefix_token_sha256": token_sha256(batch["input_ids"][0])}
         record.update({key: tensor_record(batch.get(key)) for key in
                        ("input_ids", "attention_mask", "pixel_values", "image_grid_thw")})
+        pixels = batch.get("pixel_values")
+        record["pixel_values_bfloat16"] = tensor_record(pixels.to(torch.bfloat16)) if pixels is not None else None
         report["samples"].append(record)
         report["elapsed_seconds"] = time.monotonic() - started
         save(args.output, report)
@@ -78,6 +90,11 @@ def compare(args):
     report = {"status": "passed" if not mismatches and not missing and left else "failed",
               "training_transformers": training["transformers"], "serving_transformers": serving["transformers"],
               "compared": len(left.keys() & right.keys()), "missing": missing, "mismatches": mismatches,
+              "bfloat16_pixel_samples": sum(left[key].get("pixel_values_bfloat16") is not None
+                                              and right[key].get("pixel_values_bfloat16") is not None
+                                              for key in left.keys() & right.keys()),
+              "bfloat16_pixel_mismatches": [key for key in left.keys() & right.keys()
+                  if left[key].get("pixel_values_bfloat16") != right[key].get("pixel_values_bfloat16")],
               "scope": "same checkpoint, real CPU processor outputs; no server/model inference"}
     save(args.output, report)
     return report
@@ -191,6 +208,7 @@ def main():
     parser.add_argument("mode", choices=("prefixes", "compare", "tools"))
     parser.add_argument("--model", type=Path)
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--probes", type=Path, help="Read unchanged exported prefix text and original images")
     parser.add_argument("--decisions", type=Path)
     parser.add_argument("--episodes", type=Path)
     parser.add_argument("--data-root", type=Path)
