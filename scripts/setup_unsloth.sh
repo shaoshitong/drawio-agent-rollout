@@ -12,6 +12,8 @@ site=$("$base/env/bin/python" -c 'import sysconfig; print(sysconfig.get_path("pu
 inherited=$("$bootstrap" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
 printf '%s\n' "$inherited" > "$site/serving-torch.pth"
 if [[ -n "${3:-}" ]]; then
+  unset PYTHONPATH
+  "$bootstrap" "$(dirname "$0")/prepare_sft_environment.py" "$base/env" "$3"
   "$base/env/bin/python" -m pip install --no-compile \
     --index-url "${DRAWIO_PYPI_INDEX:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}" \
     -r "$3" --report "$base/environment-install.json"
