@@ -14,17 +14,23 @@ from .data import token_sha256
 from .train_unsloth import use_linear_patch_embedding
 
 
-def native_batch(processor, row, directory):
-    import torch
+def native_prompt(processor, row, directory):
     from PIL import Image
 
     images = [Image.open(directory / name).convert("RGB") for name in row["images"]]
     kwargs = {"images": images} if images else {}
     batch = processor(text=[row["prompt"]], add_special_tokens=False, return_tensors="pt", **kwargs)
+    if token_sha256(batch["input_ids"][0]) != row["prompt_token_sha256"]:
+        raise ValueError(f"{row['sample_id']}: native prompt token IDs changed")
+    return batch
+
+
+def native_batch(processor, row, directory):
+    import torch
+
+    batch = native_prompt(processor, row, directory)
     prompt = batch["input_ids"]
     target = processor(text=[row["completion"]], add_special_tokens=False, return_tensors="pt")["input_ids"]
-    if token_sha256(prompt[0]) != row["prompt_token_sha256"]:
-        raise ValueError(f"{row['sample_id']}: native prompt token IDs changed")
     if prompt.shape[1] + target.shape[1] != row["sequence_tokens"] or target.shape[1] != row["target_tokens"]:
         raise ValueError(f"{row['sample_id']}: native sequence or loss-mask length changed")
     batch["input_ids"] = torch.cat((prompt, target), dim=1)
@@ -35,9 +41,9 @@ def native_batch(processor, row, directory):
     return batch, target[0], prompt.shape[1]
 
 
-def harvest(args):
+def load_checkpoint(args):
     import torch
-    from safetensors.torch import save_file, load_file
+    from safetensors.torch import load_file
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     torch.cuda.set_device(0)
@@ -60,6 +66,14 @@ def harvest(args):
     model.eval()
     use_linear_patch_embedding(model)
     root = model.get_base_model() if args.variant == "peft" else model
+    return processor, model, root
+
+
+def harvest(args):
+    import torch
+    from safetensors.torch import save_file
+
+    processor, model, root = load_checkpoint(args)
     if args.layer_progress:
         for index, layer in enumerate(root.model.language_model.layers):
             layer.register_forward_pre_hook(lambda _module, _inputs, index=index: print(json.dumps(
