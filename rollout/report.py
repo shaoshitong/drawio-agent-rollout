@@ -127,9 +127,13 @@ def gpu_summary(path):
 
 def collect_run(name, root):
     warnings = []
-    episode = root / "episode"
+    episode = root / "episode" if (root / "episode").is_dir() else root
     case = episode / "case"
     protocol = read_json(episode / "protocol.json", warnings) or {}
+    protocol.setdefault("context_window", protocol.get("generator_context"))
+    protocol.setdefault("max_tokens", protocol.get("generator_max_output"))
+    if "reviewer_training_loss" in protocol:
+        protocol.setdefault("reviewer_frozen", protocol["reviewer_training_loss"] is False)
     native = native_summary(root, warnings)
     completion = read_json(episode / "completed.json", warnings) or {}
     found = set()
@@ -221,9 +225,14 @@ def collect_run(name, root):
             audit(wire, warnings, final_upstream=destination, shared=wire == root.parent / "api-wire.jsonl")
         )
     outcome = read_json(root / "host-outcome.json", warnings) or {}
+    failure = read_json(root / "failure.json", warnings)
+    if failure and not outcome:
+        outcome = {"kind": "failed", "summary": f"{failure.get('type')}: {failure.get('message')}"}
+    reference = case / "reference.png"
     return {
         "name": name,
         "path": str(root),
+        "reference_sha256": sha256(reference.read_bytes()).hexdigest() if reference.is_file() else None,
         "outcome": {key: outcome.get(key) for key in ("kind", "summary")},
         "protocol": {
             key: protocol.get(key)
@@ -340,7 +349,10 @@ def main():
         name, separator, path = entry.partition("=")
         if not separator or not name or not path:
             parser.error("--run 格式为 NAME=PATH")
-        runs.append(collect_run(name, Path(path).expanduser().resolve()))
+        run = collect_run(name, Path(path).expanduser().resolve())
+        if run["reference_sha256"] != asset(args.reference)["sha256"]:
+            parser.error(f"{name} 与本次 reference PNG 不同或缺少可核验的参考图")
+        runs.append(run)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(make_html(args.reference, runs), encoding="utf-8")
     print(
