@@ -28,7 +28,7 @@ def images(value):
             yield from images(item)
 
 
-def response_summary(chunks):
+def response_summary(chunks, with_arguments=False):
     summary = {"content_characters": 0, "reasoning_characters": 0, "tool_calls": {}}
     for line in b"".join(chunks).splitlines():
         if not line.startswith(b"data: ") or line == b"data: [DONE]":
@@ -43,16 +43,20 @@ def response_summary(chunks):
         for choice in event.get("choices", []):
             if choice.get("finish_reason"):
                 summary["finish_reason"] = choice["finish_reason"]
-            delta = choice.get("delta", {})
+            delta = choice.get("delta") or {}
             summary["content_characters"] += len(delta.get("content") or "")
             summary["reasoning_characters"] += len(delta.get("reasoning_content") or "")
-            for call in delta.get("tool_calls", []):
+            for call in delta.get("tool_calls") or []:
                 tool = summary["tool_calls"].setdefault(
                     str(call.get("index", 0)), {"name": "", "argument_characters": 0}
                 )
                 function = call.get("function", {})
                 tool["name"] += function.get("name") or ""
                 tool["argument_characters"] += len(function.get("arguments") or "")
+                if with_arguments:
+                    tool["arguments"] = tool.get("arguments", "") + (function.get("arguments") or "")
+                    if call.get("id"):
+                        tool["id"] = call["id"]
     return summary
 
 
