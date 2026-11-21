@@ -30,7 +30,7 @@ def snapshot_pairs(root):
     database = Path(root) / "archive/ledger.sqlite"
     with sqlite3.connect("file:" + str(database) + "?mode=ro", uri=True) as connection:
         calls = connection.execute("select id,episode,stage,artifacts from calls where "
-            "role='generator' and completed=1 and status=200 and error is null order by id").fetchall()
+            "role='generator' and artifacts is not null order by id").fetchall()
     phases = defaultdict(list)
     for number, episode, stage, reference in calls:
         phases[(episode, stage)].append((number, reference))
@@ -67,11 +67,15 @@ def trajectory_summaries(details):
     for episode, rows in sorted(episodes.items()):
         first = [row for row in rows if row["generation_stage"] == 1]
         writes = [index + 1 for index, row in enumerate(first) if row["artifact_effect"] == "native_xml_changed"]
+        code = [index + 1 for index, row in enumerate(first)
+                if row["artifact_effect"] in ("native_xml_changed", "code_file_changed")]
         inspections = [row for row in rows if row["pixel_inspection"]]
         result.append({"episode": episode, "decisions": len(rows), "generation1_decisions": len(first),
             "initial_xml_present": first[0]["xml_present_before"] if first else None,
             "first_xml_change_decision": writes[0] if writes else None,
             "first_xml_change_fraction": writes[0] / len(first) if writes else None,
+            "first_code_or_xml_decision": code[0] if code else None,
+            "first_code_or_xml_fraction": code[0] / len(first) if code else None,
             "native_xml_change_decisions": len([row for row in rows if row["artifact_effect"] == "native_xml_changed"]),
             "effect_counts": dict(Counter(row["artifact_effect"] for row in rows)),
             "category_counts": dict(Counter(row["category"] for row in rows)),
@@ -93,12 +97,15 @@ def audit(args):
     limit = args.updates * args.world_size * config["batch_size"] * config["gradient_accumulation_steps"]
     selected = order[:limit]
     sampling = {"mode": "actual_checkpoint_prefix", "updates": args.updates}
-    if args.episodes:
+    complete_episodes = args.episodes or args.seen_episodes
+    if complete_episodes:
         pool = sorted({row["episode"] for row in examples.dataset.rows})
-        chosen = set(random.Random(args.seed).sample(pool, min(args.episodes, len(pool))))
+        chosen = ({examples.dataset.rows[index]["episode"] for index in selected} if args.seen_episodes
+                  else set(random.Random(args.seed).sample(pool, min(args.episodes, len(pool)))))
         selected = [index for index, row in enumerate(examples.dataset.rows) if row["episode"] in chosen]
         selected.sort(key=lambda index: (examples.dataset.rows[index]["episode"], examples.dataset.rows[index]["call_id"]))
-        sampling = {"mode": "uniform_complete_training_episode_sample", "seed": args.seed,
+        sampling = {"mode": "seen_episode_census" if args.seen_episodes else "uniform_complete_training_episode_sample",
+                    "seed": args.seed, "seen_through_update": args.updates if args.seen_episodes else None,
                     "pool_episodes": len(pool), "sampled_episodes": sorted(chosen),
                     "includes_validation_episodes": False}
     stores, pairs, counts, tokens, episode_counts = {}, {}, Counter(), Counter(), Counter()
@@ -137,8 +144,8 @@ def audit(args):
             print(json.dumps({"audited": position + 1, "total": len(selected)}), flush=True)
     total_tokens = sum(tokens.values())
     report = {"at": time.time(), "sampling": sampling, "decisions_audited": len(selected),
-        "updates": args.updates if not args.episodes else None,
-        "exposures": len(selected) if not args.episodes else None,
+        "updates": args.updates if not complete_episodes else None,
+        "exposures": len(selected) if not complete_episodes else None,
         "unique_samples": len({row["sample_id"] for row in details}), "unique_episodes": len(episode_counts),
         "curriculum_order_sha256": expected, "actual_training_order_verified": True,
         "components_range": [min(components), max(components)],
@@ -151,7 +158,7 @@ def audit(args):
             "target_tokens": effect_tokens[name], "target_token_fraction": effect_tokens[name] / total_tokens}
             for name in sorted(effects)},
         "byte_identical_image_files_written_again": duplicate_images,
-        "artifact_method": "Compare the case snapshot at this request with the next successful generator request in the same episode and generation stage. Missing next snapshots stay unknown. No-case-file-change may still acquire information and is not automatically a bad step. Exact SHA image duplication is a conservative lower bound.",
+        "artifact_method": "Compare the case snapshot at this request with the next recorded generator request in the same episode and generation stage, including failed requests to avoid crossing unobserved actions. Missing next snapshots stay unknown. No-case-file-change may still acquire information and is not automatically a bad step. Exact SHA image duplication is a conservative lower bound.",
         "definition": "Mutually exclusive: XML-related argument markers first; then .crop calls; then read_image; other tools; assistant-only. XML-related includes inspecting/rendering, not only XML writes. Token totals include each selected decision's full reasoning and completion, not just crop code.",
         "limitations": ["String-based semantic categories; mixed calls assigned by the stated priority",
                         "Exposure distribution is evidence of supervision, not a causal explanation of one rollout"],
@@ -160,7 +167,7 @@ def audit(args):
     args.output.mkdir(parents=True)
     (args.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
     (args.output / "decisions.jsonl").write_text("".join(json.dumps(row) + "\n" for row in details))
-    if args.episodes:
+    if complete_episodes:
         (args.output / "trajectories.jsonl").write_text("".join(json.dumps(row) + "\n" for row in trajectory_summaries(details)))
     print(json.dumps({key: value for key, value in report.items() if key not in ("per_episode", "sampling")}), flush=True)
 
@@ -174,7 +181,9 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--updates", type=int, default=35)
     parser.add_argument("--world-size", type=int, default=4)
-    parser.add_argument("--episodes", type=int, default=0)
+    sampling = parser.add_mutually_exclusive_group()
+    sampling.add_argument("--episodes", type=int, default=0)
+    sampling.add_argument("--seen-episodes", action="store_true")
     parser.add_argument("--seed", type=int, default=3407)
     audit(parser.parse_args())
 
