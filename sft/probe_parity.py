@@ -2,9 +2,12 @@
 
 import argparse
 from bisect import bisect_right
+import faulthandler
 import hashlib
 import json
 from pathlib import Path
+import signal
+import sys
 import time
 
 from .data import token_sha256
@@ -43,6 +46,8 @@ def harvest(args):
         attn_implementation="sdpa", local_files_only=True,
     )
     if args.variant == "peft":
+        # Dense BF16 adapters do not use optional quantization backends.
+        sys.modules["torchao"] = None
         from peft import PeftModel, get_peft_model_state_dict
 
         model = PeftModel.from_pretrained(model, args.adapter, is_trainable=False)
@@ -53,6 +58,12 @@ def harvest(args):
             raise ValueError("Not every saved LoRA tensor was loaded exactly")
     model.eval()
     root = model.get_base_model() if args.variant == "peft" else model
+    if args.layer_progress:
+        for index, layer in enumerate(root.model.language_model.layers):
+            layer.register_forward_pre_hook(lambda _module, _inputs, index=index: print(json.dumps(
+                {"event": "layer_start", "variant": args.variant, "layer": index, "at": time.time()}), flush=True))
+            layer.register_forward_hook(lambda _module, _inputs, _output, index=index: print(json.dumps(
+                {"event": "layer_done", "variant": args.variant, "layer": index, "at": time.time()}), flush=True))
     directory = args.output / args.variant
     directory.mkdir(parents=True, exist_ok=False)
     head = root.lm_head.weight.detach().to(torch.bfloat16).contiguous().view(torch.uint8).cpu()
@@ -148,6 +159,7 @@ def main():
     from setproctitle import setproctitle
 
     setproctitle("python")
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("harvest", "score"))
     for name in ("base", "probes", "output"):
@@ -155,6 +167,7 @@ def main():
     parser.add_argument("--model", type=Path)
     parser.add_argument("--adapter", type=Path)
     parser.add_argument("--variant", choices=("base", "peft", "merged"))
+    parser.add_argument("--layer-progress", action="store_true")
     args = parser.parse_args()
     (harvest if args.mode == "harvest" else scores)(args)
 
