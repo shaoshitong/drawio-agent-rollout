@@ -27,9 +27,10 @@ from store import Store
 
 def start_model(args):
     serving = args.out / "serving"
-    create_overlay(args.model_path, serving, "precise-coding")
+    create_overlay(args.model_path, serving, getattr(args, "sampling_preset", "precise-coding"))
     command = [sys.executable, "-m", "sglang.launch_server", "--model-path", str(serving),
-               "--served-model-name", "Qwen/Qwen3.5-9B", "--host", "127.0.0.1",
+               "--served-model-name", getattr(args, "generator_model", "Qwen/Qwen3.5-9B"),
+               "--host", getattr(args, "host", "127.0.0.1"),
                "--port", str(args.port), "--tp", "1", "--dtype", "bfloat16",
                "--context-length", "262144", "--max-total-tokens", "262144",
                "--max-running-requests", "1", "--mem-fraction-static", "0.85",
@@ -39,10 +40,15 @@ def start_model(args):
                json.dumps({"min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0})]
     save(args.out / "server-command.json", command)
     log = (args.out / "server.log").open("wb")
+    environment = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+        CUDA_VISIBLE_DEVICES=args.gpu, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
+        OMP_NUM_THREADS="4", TOKENIZERS_PARALLELISM="false")
+    if getattr(args, "generator_model", "") == "Qwen/Qwen3.8-27B":
+        environment["DSH_QWEN38_PARSER_COMPAT"] = "1"
+        environment["PYTHONPATH"] = os.pathsep.join((str(HERE.parent / "rollout/h20_bootstrap"),
+            str(HERE.parent / "rollout"), environment.get("PYTHONPATH", "")))
     process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True,
-        env=dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
-                 CUDA_VISIBLE_DEVICES=args.gpu, HF_HUB_OFFLINE="1",
-                 TRANSFORMERS_OFFLINE="1", OMP_NUM_THREADS="4", TOKENIZERS_PARALLELISM="false"))
+                               env=environment)
     return process, log
 
 
@@ -72,12 +78,14 @@ def evaluation_config(args, reviewer_url="", reviewer_auth=None):
         render_runtime=args.root / "renderer", renderer_python=args.root / "renderer/venv/bin/python",
         python_runtime_root=Path(sys.base_prefix),
         extra_runtime_mounts=list(dict.fromkeys((Path(sys.prefix), Path(sys.prefix).resolve()))),
-        generator_model="Qwen/Qwen3.5-9B", reviewer_model="deepseek-flash",
+        generator_model=getattr(args, "generator_model", "Qwen/Qwen3.5-9B"), reviewer_model="deepseek-flash",
         generator_url=f"http://127.0.0.1:{args.port}/v1",
-        reviewer_url=reviewer_url, generator_auth_file=None, reviewer_auth_file=reviewer_auth,
+        reviewer_url=reviewer_url, generator_auth_file=getattr(args, "generator_auth_file", None),
+        reviewer_auth_file=reviewer_auth,
         context_window=262144, reviewer_context_window=1048576, max_tokens=131072,
-        reasoning_effort="high", preserve_thinking=False, qwen38_effort="xhigh",
-        sampling_preset="precise-coding", reviewer_sampling_preset="model", seed=42,
+        reasoning_effort=getattr(args, "reasoning_effort", "high"),
+        preserve_thinking=getattr(args, "preserve_thinking", False), qwen38_effort="xhigh",
+        sampling_preset=getattr(args, "sampling_preset", "precise-coding"), reviewer_sampling_preset="model", seed=42,
         rounds=2, skill_mode="full", single_self_review=True, seeded=False,
         resume=True, resume_note="", compaction_headroom_tokens=None, turn_timeout=21600)
 
@@ -96,17 +104,19 @@ def reconstruct(args, key):
         "generator_context": config.context_window, "generator_max_output": config.max_tokens,
         "reviewer_context": config.reviewer_context_window, "reviewer_max_output": 32768,
         "reviewer_thinking": False, "reviewer_training_loss": False, "rounds": 2,
-        "reviews": 1, "seed": 42, "generator_sampling": "precise-coding",
-        "native_compaction_unchanged": True, "preserve_thinking": False,
+        "reviews": 1, "seed": 42, "generator_sampling": config.sampling_preset,
+        "native_compaction_unchanged": True, "preserve_thinking": config.preserve_thinking,
         "full_skill": True, "single_self_review": True, "training": False,
         "gold_available": False, "gold_feedback": False, "mcp": False,
         "reference_sha256": sha256(args.reference.read_bytes()).hexdigest(),
-        "deployment": "FP32 checkpoint loaded by SGLang in BF16; numerical PEFT/export parity not yet certified",
+        "deployment": getattr(args, "deployment", "Checkpoint served in BF16; numerical PEFT/export parity not yet certified"),
         "reviewer_matches_teacher_model": True, "reviewer_budget_cny": 12}
     save(args.out / "protocol.json", protocol)
     generator_session = reviewer_session = None
     try:
         for number in (1, 2):
+            if getattr(args, "generator_service", None):
+                args.generator_service.stage = number
             generator_session, _ = run_generation(config, number, generator_session)
             xml = case / f"round{number}.drawio"
             validity = validate_xml(xml)
@@ -140,6 +150,10 @@ def main():
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--gpu", required=True)
     parser.add_argument("--port", type=int, default=32635)
+    parser.add_argument("--external-generator", action="store_true")
+    parser.add_argument("--generator-model", default="Qwen/Qwen3.5-9B")
+    parser.add_argument("--sampling-preset", default="precise-coding")
+    parser.add_argument("--preserve-thinking", action="store_true")
     args = parser.parse_args()
     args.root, args.out = args.root.absolute(), args.out.absolute()
     args.model_path, args.reference = args.model_path.resolve(), args.reference.resolve()
@@ -149,22 +163,27 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     lock = (args.out / "evaluation.lock").open("a")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    inventory = subprocess.check_output(["nvidia-smi", "-i", args.gpu,
-        "--query-gpu=uuid,memory.used", "--format=csv,noheader,nounits"], text=True).strip()
-    if int(inventory.split(",")[-1]) > 1024:
-        raise RuntimeError("Selected evaluation GPU is already occupied: " + inventory)
-    server, log = start_model(args)
-    save(args.out / "launch.json", {"pid": os.getpid(), "server_pid": server.pid,
-                                   "gpu": args.gpu, "inventory_before": inventory, "at": time.time()})
+    server = log = None
+    if not args.external_generator:
+        inventory = subprocess.check_output(["nvidia-smi", "-i", args.gpu,
+            "--query-gpu=uuid,memory.used", "--format=csv,noheader,nounits"], text=True).strip()
+        if int(inventory.split(",")[-1]) > 1024:
+            raise RuntimeError("Selected evaluation GPU is already occupied: " + inventory)
+        server, log = start_model(args)
+    save(args.out / "launch.json", {"pid": os.getpid(), "server_pid": server.pid if server else None,
+                                   "gpu": args.gpu, "external_generator": args.external_generator,
+                                   "at": time.time()})
     try:
-        ready(server, args.port, timeout=900)
+        if server:
+            ready(server, args.port, timeout=900)
         print(json.dumps({"server_ready": True, "at": time.time()}), flush=True)
         reconstruct(args, key)
     except Exception as error:
         save(args.out / "failure.json", {"type": type(error).__name__, "message": str(error), "at": time.time()})
         raise
     finally:
-        stop_model(server, log)
+        if server:
+            stop_model(server, log)
 
 
 if __name__ == "__main__":
