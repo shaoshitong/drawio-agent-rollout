@@ -11,6 +11,7 @@ import sys
 import time
 
 from .data import token_sha256
+from .train_unsloth import use_linear_patch_embedding
 
 
 def native_batch(processor, row, directory):
@@ -57,6 +58,7 @@ def harvest(args):
                                                    for key, value in expected.items()):
             raise ValueError("Not every saved LoRA tensor was loaded exactly")
     model.eval()
+    use_linear_patch_embedding(model)
     root = model.get_base_model() if args.variant == "peft" else model
     if args.layer_progress:
         for index, layer in enumerate(root.model.language_model.layers):
@@ -102,16 +104,19 @@ def scores(args):
     with safe_open(args.base / index["lm_head.weight"], framework="pt", device="cpu") as source:
         head = source.get_tensor("lm_head.weight").to("cuda", dtype=torch.bfloat16)
     rows = [json.loads(line) for line in (args.probes / "probes.jsonl").read_text().splitlines()]
-    variants = ("base", "peft", "merged")
-    heads = [(args.output / name / "head-sha256.txt").read_text().strip() for name in variants]
+    directories = {name: args.output / name for name in ("base", "peft", "merged")}
+    if args.reference_base:
+        directories["original_conv3d_base"] = args.reference_base
+    variants = tuple(directories)
+    heads = [(directory / "head-sha256.txt").read_text().strip() for directory in directories.values()]
     if len(set(heads)) != 1:
         raise ValueError("Shared-head parity applies to LoRA merges, not changed full-finetuning heads")
     labels = ("0-32K", "32-64K", "64-128K", "128K+")
-    groups = {name: {"tokens": 0, "ce_sum": [0.0] * 3, "kl_sum": 0.0, "agreements": 0}
+    groups = {name: {"tokens": 0, "ce_sum": [0.0] * len(variants), "kl_sum": 0.0, "agreements": 0}
               for name in ("overall", *labels)}
     with torch.inference_mode():
         for position, row in enumerate(rows):
-            states = [load_file(args.output / variant / f"{position:03}.safetensors") for variant in variants]
+            states = [load_file(directory / f"{position:03}.safetensors") for directory in directories.values()]
             target = states[0]["target"]
             if any(not torch.equal(target, state["target"]) for state in states[1:]):
                 raise ValueError("Compared checkpoints have different supervised tokens")
@@ -168,6 +173,8 @@ def main():
     parser.add_argument("--adapter", type=Path)
     parser.add_argument("--variant", choices=("base", "peft", "merged"))
     parser.add_argument("--layer-progress", action="store_true")
+    parser.add_argument("--reference-base", type=Path,
+                        help="Also score preserved baseline states from the original Conv3d projection")
     args = parser.parse_args()
     (harvest if args.mode == "harvest" else scores)(args)
 
