@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-base=${1:?Usage: setup_unsloth.sh REMOTE_ROOT EXISTING_PYTHON}
+base=${1:?Usage: setup_unsloth.sh REMOTE_ROOT EXISTING_PYTHON [PINNED_REQUIREMENTS]}
 bootstrap=${2:?Existing Python with a compatible torch installation is required}
 export TMPDIR="$base/cache/tmp" PIP_CACHE_DIR="$base/cache/pip"
 export XDG_CACHE_HOME="$base/cache" HF_HOME="$base/cache/huggingface"
@@ -11,6 +11,13 @@ mkdir -p "$TMPDIR" "$base/sources" "$base/logs"
 site=$("$base/env/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
 inherited=$("$bootstrap" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
 printf '%s\n' "$inherited" > "$site/serving-torch.pth"
+if [[ -n "${3:-}" ]]; then
+  "$base/env/bin/python" -m pip install --no-compile \
+    --index-url "${DRAWIO_PYPI_INDEX:-https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple}" \
+    -r "$3" --report "$base/environment-install.json"
+  "$base/env/bin/python" -m pip freeze > "$base/environment-lock.txt"
+  exit 0
+fi
 for pair in unsloth-zoo:49980bede3e4720fc254a336859ad73465fc5390; do
   name=${pair%%:*}
   revision=${pair#*:}
