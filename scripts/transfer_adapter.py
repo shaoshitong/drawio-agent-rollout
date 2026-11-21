@@ -105,7 +105,7 @@ def transfer(args):
             raise ValueError("Source bundle checksum differs")
         commit = api.upload_file(path_or_fileobj=args.file, path_in_repo=args.path,
                                  repo_id=args.repo, repo_type="dataset",
-                                 commit_message="Publish verified trajectory SFT LoRA step 35")
+                                 commit_message="Publish verified SFT artifact " + args.file.name)
         info = api.repo_info(args.repo, repo_type="dataset", revision=commit.oid, files_metadata=True)
         remote = next(item for item in info.siblings if item.rfilename == args.path)
         if not remote.lfs or remote.lfs.sha256 != args.sha256 or remote.size != args.file.stat().st_size:

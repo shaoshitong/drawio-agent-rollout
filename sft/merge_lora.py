@@ -76,9 +76,11 @@ def merge(base, checkpoint, output):
     (output / "config.json").write_text(json.dumps(model_config, indent=2) + "\n")
     index["metadata"]["total_size"] = size
     (output / "model.safetensors.index.json").write_text(json.dumps(index, indent=2) + "\n")
+    provenance = next((json.loads(path.read_text()) for path in
+                       (checkpoint / "trainer_state.json", checkpoint / "provenance.json") if path.is_file()), {})
     report = {"status": "merged", "precision": "float32", "base": str(base),
               "adapter": str(checkpoint), "adapter_sha256": sha256(checkpoint / "adapter_model.safetensors"),
-              "global_step": json.loads((checkpoint / "trainer_state.json").read_text())["global_step"],
+              "global_step": provenance.get("global_step"),
               "tensors": reports, "files": files, "model_bytes": size}
     (output / "merge-report.json").write_text(json.dumps(report, indent=2) + "\n")
     return report
