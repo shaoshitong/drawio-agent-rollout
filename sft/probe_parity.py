@@ -153,15 +153,24 @@ def harvest(args):
             print(json.dumps(progress), flush=True)
 
 
+def checkpoint_head(checkpoint):
+    import torch
+    from safetensors import safe_open
+
+    path = checkpoint / "model.safetensors"
+    if not path.is_file():
+        index = json.loads((checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
+        path = checkpoint / index["lm_head.weight"]
+    with safe_open(path, framework="pt", device="cpu") as source:
+        return source.get_tensor("lm_head.weight").to(torch.bfloat16).contiguous()
+
+
 def scores(args):
     import torch
     import torch.nn.functional as functional
     from safetensors.torch import load_file
-    from safetensors import safe_open
 
-    index = json.loads((args.base / "model.safetensors.index.json").read_text())["weight_map"]
-    with safe_open(args.base / index["lm_head.weight"], framework="pt", device="cpu") as source:
-        head = source.get_tensor("lm_head.weight").to("cuda", dtype=torch.bfloat16)
+    head = checkpoint_head(args.base).to("cuda")
     rows = [json.loads(line) for line in (args.probes / "probes.jsonl").read_text().splitlines()]
     directories = {name: args.output / name for name in ("base", "peft", "merged")}
     if args.reference_base:
@@ -234,9 +243,7 @@ def score_loss(args):
     from safetensors.torch import load_file
 
     checkpoint = args.model or args.base
-    index = json.loads((checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
-    with safe_open(checkpoint / index["lm_head.weight"], framework="pt", device="cpu") as source:
-        head = source.get_tensor("lm_head.weight").to(torch.bfloat16).contiguous()
+    head = checkpoint_head(checkpoint)
     digest = hashlib.sha256(head.view(torch.uint8).numpy().tobytes()).hexdigest()
     directory = args.output / args.variant
     if digest != (directory / "head-sha256.txt").read_text().strip():
