@@ -129,7 +129,7 @@ def run_turn(args, role, number, session):
         from deepseek_profile import profile_yaml as builder
     if role == "reviewer":
         effort = "off"
-        context_window = min(context_window, getattr(args, "reviewer_context_window", 65536))
+        context_window = getattr(args, "reviewer_context_window", None) or min(context_window, 65536)
         max_tokens = min(max_tokens, 32768)
     profile = dict(
         base_url="http://127.0.0.1:30101/v1",
@@ -301,7 +301,7 @@ def run_turn(args, role, number, session):
         command.extend(("--session-id", session))
     command.append(prompt)
     started = time.monotonic()
-    auth_file = args.generator_auth_file if role == "generator" else None
+    auth_file = args.generator_auth_file if role == "generator" else getattr(args, "reviewer_auth_file", None)
     preset = getattr(args, "reviewer_sampling_preset", None) if role == "reviewer" else None
     preset = preset or args.sampling_preset
     sampling = dict(

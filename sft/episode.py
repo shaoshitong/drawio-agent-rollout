@@ -126,7 +126,9 @@ def run_generation(config, number, session):
 def generation_retry_reason(folder, state):
     if state.get("timed_out"):
         return "timeout"
-    if state.get("completed") and not (folder / "case" / f"round{state['round']}.drawio").is_file():
+    if state.get("validation_error") == "missing_candidate_xml" or (
+        state.get("completed") and not (folder / "case" / f"round{state['round']}.drawio").is_file()
+    ):
         return "artifact"
     log = folder / "generator" / state.get("log_dir", "") / "stderr.log"
     if log.is_file() and log.read_text().startswith(
