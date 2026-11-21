@@ -320,16 +320,27 @@ def curriculum_order(examples, config, world_size):
     from transformers.trainer_pt_utils import LengthGroupedSampler
 
     rows = examples.dataset.rows[:len(examples)]
+    pool = list(range(len(rows)))
+    sampling_path = config.get("sampling_pool")
+    if sampling_path:
+        sampling = json.loads(Path(sampling_path).read_text())
+        manifest_hash = hashlib.sha256(Path(config["manifest"]).read_bytes()).hexdigest()
+        if sampling["manifest_sha256"] != manifest_hash:
+            raise ValueError("Sampling pool belongs to a different training manifest")
+        pool = sampling["source_indices"]
+        if len(pool) != len(rows) or any(index < 0 or index >= len(rows) for index in pool):
+            raise ValueError("Sampling pool differs from the complete training split")
     episodes = {row["episode"]: row["final_components"] for row in rows}
     components = sorted(episodes.values())
     count = config["difficulty_stages"]
     boundaries = [components[math.ceil(stage * len(components) / count) - 1]
                   for stage in range(1, count)]
     order, stages = [], []
+    duplicate_swaps = 0
     global_batch = world_size * config["batch_size"]
     for stage in range(count):
-        indices = [index for index, row in enumerate(rows)
-                   if bisect_left(boundaries, row["final_components"]) == stage]
+        indices = [index for index in pool
+                   if bisect_left(boundaries, rows[index]["final_components"]) == stage]
         if not indices:
             continue
         seed = config["seed"] + stage
@@ -338,6 +349,12 @@ def curriculum_order(examples, config, world_size):
             generator=torch.Generator(device="cpu").manual_seed(seed),
         )
         selected = [indices[index] for index in sampler]
+        if sampling_path:
+            from .sampling_pool import separate_update_duplicates
+
+            selected, swaps = separate_update_duplicates(
+                selected, rows, global_batch * config["gradient_accumulation_steps"], len(order))
+            duplicate_swaps += swaps
         order.extend(selected)
         stages.append({
             "difficulty_stage": stage, "seed": seed,
@@ -347,7 +364,7 @@ def curriculum_order(examples, config, world_size):
             "generation_stage_counts": dict(Counter(str(rows[index]["stage"]) for index in indices)),
             "source_indices_sha256": hashlib.sha256(json.dumps(selected).encode()).hexdigest(),
         })
-    return order, {
+    plan = {
         "policy": config["sampler_policy"], "seed": config["seed"], "world_size": world_size,
         "global_microbatch_size": global_batch, "difficulty_boundaries": boundaries,
         "difficulty_stage_rule": "bisect_left: components <= boundary belong to the lower stage",
@@ -358,6 +375,14 @@ def curriculum_order(examples, config, world_size):
         "sample_ids_sha256": hashlib.sha256(json.dumps([rows[index]["sample_id"] for index in order]).encode()).hexdigest(),
         "sample_contents": "unchanged full prefixes and current completions; order only",
     }
+    if sampling_path:
+        plan["sampling_pool"] = {
+            "path": str(sampling_path), "sha256": hashlib.sha256(Path(sampling_path).read_bytes()).hexdigest(),
+            "duplicate_separation_swaps": duplicate_swaps,
+            "optimizer_update_decisions": global_batch * config["gradient_accumulation_steps"],
+        }
+        plan["sample_contents"] = "unchanged full prefixes and current completions; audited decision resampling"
+    return order, plan
 
 
 def train(config, model, processor, examples, collator, output):
@@ -524,6 +549,7 @@ def main():
     parser.add_argument("--gradient-accumulation-steps", type=int)
     parser.add_argument("--resume-from-checkpoint")
     parser.add_argument("--split")
+    parser.add_argument("--sampling-pool", type=Path)
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     config.update({key: str(value) if isinstance(value, Path) else value
@@ -547,6 +573,8 @@ def main():
                                        "phase_decay_updates", "phase_min_lr_ratio", "vision_lr_ratio")}
         identity["world_size"] = int(os.environ.get("WORLD_SIZE", "1"))
         identity["manifest_sha256"] = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
+        if config.get("sampling_pool"):
+            identity["sampling_pool_sha256"] = hashlib.sha256(Path(config["sampling_pool"]).read_bytes()).hexdigest()
         if config.get("resume_from_checkpoint"):
             checkpoint = Path(config["resume_from_checkpoint"])
             bridge = config.get("full_finetuning") and checkpoint.resolve() == Path(config["bridge_checkpoint"]).resolve()

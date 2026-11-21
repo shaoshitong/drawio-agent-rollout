@@ -144,6 +144,36 @@ def validate_pool(indices, rows, effects):
         raise ValueError("Sampling changed closing-decision exposure")
 
 
+def separate_update_duplicates(indices, rows, update_size, offset=0):
+    """Swap nearby lengths within one difficulty stage to separate repeated targets."""
+    indices = list(indices)
+    groups = defaultdict(Counter)
+    for position, index in enumerate(indices):
+        groups[(offset + position) // update_size][index] += 1
+    swaps = 0
+    for position, source in enumerate(indices):
+        group = (offset + position) // update_size
+        if groups[group][source] < 2:
+            continue
+        candidates = (other for other, target in enumerate(indices)
+                      if (offset + other) // update_size != group
+                      and not groups[(offset + other) // update_size][source]
+                      and not groups[group][target])
+        other = min(candidates, default=None, key=lambda other: (
+            abs(rows[indices[other]]["token_count"] - rows[source]["token_count"]),
+            abs(other - position), other))
+        if other is None:
+            raise ValueError("Difficulty stage cannot separate repeated targets across updates")
+        target, destination = indices[other], (offset + other) // update_size
+        groups[group][source] -= 1
+        groups[group][target] += 1
+        groups[destination][target] -= 1
+        groups[destination][source] += 1
+        indices[position], indices[other] = target, source
+        swaps += 1
+    return indices, swaps
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("manifest", "actions", "parts", "curriculum", "output"):
