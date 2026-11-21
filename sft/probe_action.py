@@ -67,7 +67,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("base", "model", "adapter", "probes", "output"):
         parser.add_argument("--" + name, type=Path, required=name in ("base", "probes", "output"))
-    parser.add_argument("--variant", choices=("base", "peft", "merged"), required=True)
+    parser.add_argument("--variant", choices=("base", "peft", "merged", "full"), required=True)
     parser.add_argument("--sample-id", required=True)
     parser.add_argument("--max-new-tokens", type=int, default=4096)
     run(parser.parse_args())
