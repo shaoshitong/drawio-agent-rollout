@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -40,6 +41,30 @@ def digest(path):
     return value.hexdigest()
 
 
+def parallel_download(args, url, temporary, record):
+    command = ["aria2c", "--input-file=-", "--continue=true", "--allow-overwrite=true",
+               "--auto-file-renaming=false", "--file-allocation=none", "--enable-color=false",
+               "--human-readable=false", "--summary-interval=5", "--connect-timeout=15",
+               "--timeout=60", "--max-tries=4", "--retry-wait=2", "--min-split-size=8M",
+               "--split=" + str(args.connections), "--max-connection-per-server=" + str(args.connections)]
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True) as child:
+        record["downloader_pid"] = child.pid
+        args.state.write_text(json.dumps(record) + "\n")
+        child.stdin.write(url + "\n  dir=" + str(temporary.parent) + "\n  out=" + temporary.name + "\n")
+        child.stdin.close()
+        for line in child.stdout:
+            progress = re.search(r"\[#[0-9a-f]+\s+(\d+)(?:B)?/(\d+)(?:B)?", line)
+            if progress:
+                record.update(bytes=int(progress[1]), total_bytes=int(progress[2]))
+                args.state.write_text(json.dumps(record) + "\n")
+        status = child.wait()
+    if status:
+        record.update(phase="failed", downloader_exit_code=status)
+        args.state.write_text(json.dumps(record) + "\n")
+        raise RuntimeError("Parallel download failed")
+
+
 def signed_download(args):
     import requests
 
@@ -49,16 +74,23 @@ def signed_download(args):
     args.file.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.file.with_suffix(args.file.suffix + ".part")
     record = {"phase": "downloading", "bytes": 0, "started_at": time.time()}
-    with session.get(url, stream=True, timeout=(15, 60)) as response, temporary.open("wb") as stream:
-        response.raise_for_status()
-        for block in response.iter_content(8 * 1024**2):
-            stream.write(block)
-            record["bytes"] += len(block)
-            args.state.write_text(json.dumps(record) + "\n")
+    if args.connections > 1:
+        record.update(downloader="aria2", connections=args.connections,
+                      partial_file_bytes_at_start=temporary.stat().st_size if temporary.exists() else 0)
+        args.state.write_text(json.dumps(record) + "\n")
+        parallel_download(args, url, temporary, record)
+    else:
+        with session.get(url, stream=True, timeout=(15, 60)) as response, temporary.open("wb") as stream:
+            response.raise_for_status()
+            for block in response.iter_content(8 * 1024**2):
+                stream.write(block)
+                record["bytes"] += len(block)
+                args.state.write_text(json.dumps(record) + "\n")
     if digest(temporary) != args.sha256:
         raise ValueError("Signed download checksum differs")
     temporary.replace(args.file)
-    record.update(phase="verified", sha256=args.sha256, completed_at=time.time())
+    record.update(phase="verified", bytes=args.file.stat().st_size,
+                  sha256=args.sha256, completed_at=time.time())
     args.state.write_text(json.dumps(record, indent=2) + "\n")
     print(json.dumps(record))
 
@@ -75,7 +107,8 @@ def resolve_download(args):
     response.raise_for_status()
     location = response.headers["Location"]
     command = [args.remote_python, args.remote_script, "download-url", "--repo", args.repo,
-               "--path", args.path, "--file", str(args.file), "--state", str(args.state), "--sha256", args.sha256]
+               "--path", args.path, "--file", str(args.file), "--state", str(args.state), "--sha256", args.sha256,
+               "--connections", str(args.connections)]
     result = subprocess.run(["ssh", args.ssh_host, shlex.join(command)], input=location + "\n", text=True)
     if result.returncode:
         raise RuntimeError("Remote signed download failed")
@@ -138,6 +171,7 @@ def main():
     parser.add_argument("--ssh-host")
     parser.add_argument("--remote-python")
     parser.add_argument("--remote-script")
+    parser.add_argument("--connections", type=int, default=1)
     args = parser.parse_args()
     try:
         transfer(args)
