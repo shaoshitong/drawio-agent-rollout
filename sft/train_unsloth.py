@@ -22,8 +22,8 @@ def write_json(path, value):
 
 
 class Examples:
-    def __init__(self, manifest, split, enable_thinking, limit=None):
-        self.dataset = ManifestDataset(manifest, split=split)
+    def __init__(self, manifest, split, enable_thinking, limit=None, store_path=None):
+        self.dataset = ManifestDataset(manifest, split=split, store_path=store_path)
         self.length = min(len(self.dataset), limit) if limit else len(self.dataset)
         self.enable_thinking = enable_thinking
 
@@ -247,7 +247,7 @@ def setup(config):
     FastVisionModel.for_training(model)
     use_linear_patch_embedding(model)
     examples = Examples(config["manifest"], config["split"], config["enable_thinking"],
-                        config.get("max_train_samples"))
+                        config.get("max_train_samples"), config.get("store_path"))
     collator = make_collator(model, processor, examples, config, Path(config["output"]))
     return model, processor, examples, collator
 
@@ -502,7 +502,8 @@ def train(config, model, processor, examples, collator, output):
     if config.get("evaluation_enabled", True):
         from .evaluation import make_evaluation_callback
 
-        validation = Examples(config["manifest"], "validation", config["enable_thinking"])
+        validation = Examples(config["manifest"], "validation", config["enable_thinking"],
+                              store_path=config.get("store_path"))
         probe_collator = make_collator(model, processor, examples, config, output / "train-probe")
         validation_collator = make_collator(model, processor, validation, config, output / "validation")
         trainer.add_callback(make_evaluation_callback(
@@ -550,6 +551,7 @@ def main():
     parser.add_argument("--resume-from-checkpoint")
     parser.add_argument("--split")
     parser.add_argument("--sampling-pool", type=Path)
+    parser.add_argument("--store-path", type=Path, help="Read accepted decisions from a relocated content-addressed archive")
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     config.update({key: str(value) if isinstance(value, Path) else value
