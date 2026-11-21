@@ -87,6 +87,28 @@ def trajectory_summaries(details):
     return result
 
 
+def source_rows(path, rows, selected):
+    retained = {rows[index]["sample_id"]: rows[index] for index in selected}
+    episodes = {row["episode"]: row for row in retained.values()}
+    output = []
+    with path.open() as stream:
+        for line in stream:
+            original = json.loads(line)
+            episode = original["episode"]
+            if episode not in episodes:
+                continue
+            ident = f"{episode}:{original['call_id']}"
+            if ident in retained:
+                output.append({**retained[ident], "used_for_sft": True})
+            else:
+                output.append({**episodes[episode], **original, "sample_id": ident,
+                    "completion_tokens": 0, "used_for_sft": False,
+                    "excluded_reason": "context_limit" if original.get("supervision_eligible", True)
+                                       else "protocol_ineligible"})
+    output.sort(key=lambda row: (row["episode"], row["call_id"]))
+    return output
+
+
 def audit(args):
     config = json.loads(args.config.read_text())
     examples = Examples(args.manifest, "train", True)
@@ -108,13 +130,20 @@ def audit(args):
                     "seed": args.seed, "seen_through_update": args.updates if args.seen_episodes else None,
                     "pool_episodes": len(pool), "sampled_episodes": sorted(chosen),
                     "includes_validation_episodes": False}
+    rows = [{**examples.dataset.rows[index], "used_for_sft": True} for index in selected]
+    if args.source_decisions:
+        if not complete_episodes:
+            raise ValueError("Full source audit needs an episode sample or census, not a checkpoint prefix")
+        rows = source_rows(args.source_decisions, examples.dataset.rows, selected)
+        sampling["full_source_decisions_included"] = True
+        sampling["source_decisions_sha256"] = __import__("hashlib").sha256(args.source_decisions.read_bytes()).hexdigest()
     stores, pairs, counts, tokens, episode_counts = {}, {}, Counter(), Counter(), Counter()
     effects, effect_tokens, duplicate_images = Counter(), Counter(), 0
+    excluded_effects = defaultdict(Counter)
     tool_names = defaultdict(Counter)
     components, generation_stages, details = [], Counter(), []
     per_episode = defaultdict(Counter)
-    for position, index in enumerate(selected):
-        row = examples.dataset.rows[index]
+    for position, row in enumerate(rows):
         root = row["snapshot_root"]
         if root not in stores:
             stores[root] = open_store(root)
@@ -127,6 +156,8 @@ def audit(args):
         effect, duplicates, has_xml = artifact_effect(stores[root], pairs[root], row["call_id"])
         effects[effect] += 1
         effect_tokens[effect] += row["completion_tokens"]
+        if not row["used_for_sft"]:
+            excluded_effects[row["excluded_reason"]][effect] += 1
         duplicate_images += duplicates
         per_episode[row["episode"]][kind] += 1
         episode_counts[row["episode"]] += 1
@@ -135,29 +166,33 @@ def audit(args):
         details.append({"exposure": position, "sample_id": row["sample_id"], "category": kind,
                         "target_tokens": row["completion_tokens"], "generation_stage": row["stage"],
                         "artifact_effect": effect, "duplicate_images_written": duplicates,
+                        "used_for_sft": row["used_for_sft"],
                         "xml_present_before": has_xml,
                         "reasoning_characters": len(reply.get("reasoning_content") or ""),
                         "pixel_inspection": effect == "no_case_file_change" and any(
                             marker in str(reply.get("tool_calls", [])) for marker in
                             ("Image.open", "np.array", "np.where", "cv2.", "getpixel", "ImageFont", "ndimage"))})
         if (position + 1) % 200 == 0:
-            print(json.dumps({"audited": position + 1, "total": len(selected)}), flush=True)
+            print(json.dumps({"audited": position + 1, "total": len(rows)}), flush=True)
     total_tokens = sum(tokens.values())
-    report = {"at": time.time(), "sampling": sampling, "decisions_audited": len(selected),
+    report = {"at": time.time(), "sampling": sampling, "decisions_audited": len(rows),
+        "decisions_used_for_sft": sum(row["used_for_sft"] for row in rows),
+        "excluded_decision_effects": {reason: dict(values) for reason, values in excluded_effects.items()},
         "updates": args.updates if not complete_episodes else None,
         "exposures": len(selected) if not complete_episodes else None,
         "unique_samples": len({row["sample_id"] for row in details}), "unique_episodes": len(episode_counts),
         "curriculum_order_sha256": expected, "actual_training_order_verified": True,
         "components_range": [min(components), max(components)],
         "generation_stages": dict(generation_stages), "supervised_target_tokens": total_tokens,
-        "categories": {name: {"decisions": counts[name], "decision_fraction": counts[name] / len(selected),
+        "categories": {name: {"decisions": counts[name], "decision_fraction": counts[name] / len(rows),
                               "target_tokens": tokens[name], "target_token_fraction": tokens[name] / total_tokens}
                        for name in sorted(counts)},
         "tool_names_by_category": {name: dict(values) for name, values in tool_names.items()},
-        "artifact_effects": {name: {"decisions": effects[name], "decision_fraction": effects[name] / len(selected),
+        "artifact_effects": {name: {"decisions": effects[name], "decision_fraction": effects[name] / len(rows),
             "target_tokens": effect_tokens[name], "target_token_fraction": effect_tokens[name] / total_tokens}
             for name in sorted(effects)},
         "byte_identical_image_files_written_again": duplicate_images,
+        "token_scope": "Target-token totals cover only the accepted SFT decisions. Rejected source decisions are included in process counts but contribute zero to actual training supervision.",
         "artifact_method": "Compare the case snapshot at this request with the next recorded generator request in the same episode and generation stage, including failed requests to avoid crossing unobserved actions. Missing next snapshots stay unknown. No-case-file-change may still acquire information and is not automatically a bad step. Exact SHA image duplication is a conservative lower bound.",
         "definition": "Mutually exclusive: XML-related argument markers first; then .crop calls; then read_image; other tools; assistant-only. XML-related includes inspecting/rendering, not only XML writes. Token totals include each selected decision's full reasoning and completion, not just crop code.",
         "limitations": ["String-based semantic categories; mixed calls assigned by the stated priority",
@@ -184,6 +219,7 @@ def main():
     sampling = parser.add_mutually_exclusive_group()
     sampling.add_argument("--episodes", type=int, default=0)
     sampling.add_argument("--seen-episodes", action="store_true")
+    parser.add_argument("--source-decisions", type=Path)
     parser.add_argument("--seed", type=int, default=3407)
     audit(parser.parse_args())
 
