@@ -23,7 +23,8 @@ def archived_calls(root, episode, stage):
     store = open_store(root)
     with sqlite3.connect("file:" + str(root / "archive/ledger.sqlite") + "?mode=ro", uri=True) as connection:
         rows = connection.execute("select id,response from calls where episode=? and stage=? "
-            "and role='generator' and response is not null order by id", (episode, stage)).fetchall()
+            "and role='generator' and response is not null and status=200 and error is null "
+            "order by id", (episode, stage)).fetchall()
     calls = []
     for number, reference in rows:
         message = store.get(reference)["choices"][0]["message"]
