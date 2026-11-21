@@ -43,10 +43,15 @@ def artifact_effect(store, pairs, call_id):
         return "next_snapshot_unavailable", 0, None
     before_ref, after_ref = pairs[call_id]
     before, after = store.get(before_ref), store.get(after_ref)
-    has_xml = any(Path(name).suffix in (".drawio", ".xml") for name in before)
-    changed = {name: digest for name, digest in after.items() if before.get(name) != digest}
+    runtime_roots = {name.split("WEB-INF/", 1)[0] for name in before.keys() | after.keys()
+                     if "WEB-INF/" in name}
+    runtime = {name for name in before.keys() | after.keys()
+               if any(name.startswith(root) for root in runtime_roots if root)}
+    has_xml = any(candidate_xml(store, name, digest) for name, digest in before.items() if name not in runtime)
+    all_changed = {name: digest for name, digest in after.items() if before.get(name) != digest}
+    changed = {name: digest for name, digest in all_changed.items() if name not in runtime}
     paths = [Path(name) for name in changed]
-    if any(path.suffix in (".drawio", ".xml") for path in paths):
+    if any(candidate_xml(store, name, digest) for name, digest in changed.items()):
         return "native_xml_changed", 0, has_xml
     if any(path.suffix in (".py", ".js", ".sh") for path in paths):
         return "code_file_changed", 0, has_xml
@@ -56,7 +61,17 @@ def artifact_effect(store, pairs, call_id):
     if images:
         duplicates = sum(digest in before.values() for digest in images)
         return ("only_duplicate_images_written" if duplicates == len(images) else "image_files_changed"), duplicates, has_xml
-    return ("other_case_file_changed" if changed else "no_case_file_change"), 0, has_xml
+    if changed:
+        return "other_case_file_changed", 0, has_xml
+    if all_changed:
+        return "runtime_assets_changed", 0, has_xml
+    return ("case_files_deleted" if before.keys() - after.keys() else "no_case_file_change"), 0, has_xml
+
+
+def candidate_xml(store, name, digest):
+    suffix = Path(name).suffix
+    return suffix == ".drawio" or suffix == ".xml" and bool(
+        re.search(br"<(?:mxfile|mxGraphModel)(?:\s|>)", store.raw(digest)))
 
 
 def trajectory_summaries(details):
@@ -193,7 +208,7 @@ def audit(args):
             for name in sorted(effects)},
         "byte_identical_image_files_written_again": duplicate_images,
         "token_scope": "Target-token totals cover only the accepted SFT decisions. Rejected source decisions are included in process counts but contribute zero to actual training supervision.",
-        "artifact_method": "Compare the case snapshot at this request with the next recorded generator request in the same episode and generation stage, including failed requests to avoid crossing unobserved actions. Missing next snapshots stay unknown. No-case-file-change may still acquire information and is not automatically a bad step. Exact SHA image duplication is a conservative lower bound.",
+        "artifact_method": "Compare request snapshots with the next recorded generator request in the same episode and stage, including failed requests. Missing next snapshots stay unknown. Exclude unpacked renderer trees identified by WEB-INF paths; .xml files must contain a native mxfile/mxGraphModel tag. Deletion-only actions are separate. No-case-file-change may acquire information and is not automatically bad. Exact SHA image duplication is a conservative lower bound.",
         "definition": "Mutually exclusive: XML-related argument markers first; then .crop calls; then read_image; other tools; assistant-only. XML-related includes inspecting/rendering, not only XML writes. Token totals include each selected decision's full reasoning and completion, not just crop code.",
         "limitations": ["String-based semantic categories; mixed calls assigned by the stated priority",
                         "Exposure distribution is evidence of supervision, not a causal explanation of one rollout"],
