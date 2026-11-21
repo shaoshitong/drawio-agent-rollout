@@ -18,4 +18,4 @@ for variant in $variants; do
     "$python_bin" -m sft.probe_parity harvest --base "$base" --model "$model" \
         --adapter "$adapter" --variant "$variant" --probes "$probes" --output "$output" --layer-progress "${extra_args[@]}"
 done
-"$python_bin" -m sft.probe_parity score --base "$base" --probes "$probes" --output "$output"
+"$python_bin" -m sft.probe_parity score --base "$base" --probes "$probes" --output "$output" "${extra_args[@]}"

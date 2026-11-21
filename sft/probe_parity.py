@@ -126,8 +126,14 @@ def scores(args):
     labels = ("0-32K", "32-64K", "64-128K", "128K+")
     groups = {name: {"tokens": 0, "ce_sum": [0.0] * len(variants), "kl_sum": 0.0, "agreements": 0}
               for name in ("overall", *labels)}
+    probe_groups = {}
     with torch.inference_mode():
         for position, row in enumerate(rows):
+            active_groups = groups
+            if args.per_probe:
+                probe = {"tokens": 0, "ce_sum": [0.0] * len(variants), "kl_sum": 0.0, "agreements": 0}
+                probe_groups[row["sample_id"]] = probe
+                active_groups = {**groups, "_probe": probe}
             states = [load_file(directory / f"{position:03}.safetensors") for directory in directories.values()]
             target = states[0]["target"]
             if any(not torch.equal(target, state["target"]) for state in states[1:]):
@@ -143,15 +149,14 @@ def scores(args):
                 same = logp[1].argmax(-1).eq(logp[2].argmax(-1))
                 bins = torch.tensor([bisect_right((32768, 65536, 131072), prompt_tokens + offset)
                                      for offset in range(start, stop)], device="cuda")
-                for name in groups:
-                    mask = torch.ones_like(same) if name == "overall" else bins.eq(labels.index(name))
-                    group = groups[name]
+                for name, group in active_groups.items():
+                    mask = torch.ones_like(same) if name in ("overall", "_probe") else bins.eq(labels.index(name))
                     group["tokens"] += int(mask.sum())
                     group["ce_sum"] = [a + b for a, b in zip(group["ce_sum"], ce[:, mask].double().sum(1).tolist())]
                     group["kl_sum"] += float(kl[mask].double().sum())
                     group["agreements"] += int(same[mask].sum())
     metrics = {}
-    for name, group in groups.items():
+    for name, group in {**groups, **probe_groups}.items():
         count = group["tokens"]
         if count:
             ce = dict(zip(variants, [value / count for value in group["ce_sum"]]))
@@ -163,11 +168,14 @@ def scores(args):
     gate = (overall["export_ce_gap"] <= min(0.005, 0.05 * abs(overall["lora_ce_gain"]))
             and overall["peft_to_merged_kl"] <= 0.002 and overall["peft_merged_argmax_agreement"] >= 0.99)
     bin_gate = all(value["export_ce_gap"] <= 2 * overall["export_ce_gap"] for name, value in metrics.items()
-                   if name != "overall")
-    report = {"metrics": metrics, "overall_export_gate_passed": gate,
+                   if name in labels)
+    report = {"metrics": {name: value for name, value in metrics.items() if name in groups},
+              "overall_export_gate_passed": gate,
               "position_bin_gate_passed": bin_gate, "export_gate_passed": gate and bin_gate, "probes": len(rows),
               "scope": "HF true PEFT vs BF16 merged; serving parity and reconstruction assessed separately",
               "all_native_prefixes_preserved": True, "gold_feedback_to_dsh": False}
+    if args.per_probe:
+        report["per_probe"] = {name: metrics[name] for name in probe_groups}
     (args.output / "parity.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report), flush=True)
 
@@ -187,6 +195,7 @@ def main():
     parser.add_argument("--layer-progress", action="store_true")
     parser.add_argument("--offload-layers", action="store_true",
                         help="Move decoder weights between CPU and CUDA without changing native prefixes")
+    parser.add_argument("--per-probe", action="store_true", help="Also report each unchanged target decision separately")
     parser.add_argument("--reference-base", type=Path,
                         help="Also score preserved baseline states from the original Conv3d projection")
     args = parser.parse_args()
