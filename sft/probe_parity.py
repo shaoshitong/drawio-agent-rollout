@@ -71,9 +71,18 @@ def harvest(args):
     head = root.lm_head.weight.detach().to(torch.bfloat16).contiguous().view(torch.uint8).cpu()
     (directory / "head-sha256.txt").write_text(hashlib.sha256(head.numpy().tobytes()).hexdigest() + "\n")
     del head
+    if args.offload_layers:
+        from accelerate import cpu_offload_with_hook
+
+        root.lm_head.to("cpu")
+        for layer in root.model.language_model.layers:
+            _, hook = cpu_offload_with_hook(layer, execution_device=torch.device("cuda:0"))
+            layer.register_forward_hook(lambda _module, _inputs, _output, hook=hook: hook.offload())
+        torch.cuda.empty_cache()
     rows = [json.loads(line) for line in (args.probes / "probes.jsonl").read_text().splitlines()]
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
         for index, row in enumerate(rows):
+            torch.cuda.reset_peak_memory_stats()
             batch, target, prompt_tokens = native_batch(processor, row, args.probes)
             batch = {key: value.to("cuda") for key, value in batch.items()}
             print(json.dumps({"event": "probe_start", "variant": args.variant,
@@ -86,12 +95,15 @@ def harvest(args):
                 raise ValueError("Masked prediction states differ from shifted target positions")
             save_file({"hidden": hidden, "target": target}, directory / f"{index:03}.safetensors",
                       metadata={"sample_id": row["sample_id"], "prompt_tokens": str(prompt_tokens)})
+            del result, hidden, batch
             progress = {"variant": args.variant, "completed_probes": index + 1, "total_probes": len(rows),
                         "last_sample_id": row["sample_id"], "at": time.time(),
-                        "full_native_prefixes_verified": True, "training": False}
+                        "full_native_prefixes_verified": True, "training": False,
+                        "decoder_weights_cpu_offloaded": args.offload_layers,
+                        "peak_cuda_allocated_bytes": torch.cuda.max_memory_allocated(),
+                        "released_cuda_allocated_bytes": torch.cuda.memory_allocated()}
             (directory / "progress.json").write_text(json.dumps(progress, indent=2) + "\n")
             print(json.dumps(progress), flush=True)
-            del result, hidden, batch
 
 
 def scores(args):
@@ -173,6 +185,8 @@ def main():
     parser.add_argument("--adapter", type=Path)
     parser.add_argument("--variant", choices=("base", "peft", "merged"))
     parser.add_argument("--layer-progress", action="store_true")
+    parser.add_argument("--offload-layers", action="store_true",
+                        help="Move decoder weights between CPU and CUDA without changing native prefixes")
     parser.add_argument("--reference-base", type=Path,
                         help="Also score preserved baseline states from the original Conv3d projection")
     args = parser.parse_args()
