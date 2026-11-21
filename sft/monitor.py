@@ -27,7 +27,7 @@ def worker_status(pid, py_spy):
     )
     status = {"pid": int(pid), "reader_exit": result.returncode}
     text = result.stdout
-    frame = re.search(r"Trainer\._run_epoch[^\n]*\n(.*?)(?=\n    \S|\Z)", text, re.S)
+    frame = re.search(r"(?:Trainer\._run_epoch|_fast_inner_training_loop)[^\n]*\n(.*?)(?=\n    \S|\Z)", text, re.S)
     if frame:
         for field in ("step", "update_step", "i", "num_batches"):
             value = re.search(rf"\n\s+{field}: (\d+)", frame[1])
@@ -59,6 +59,7 @@ def snapshot(run, log, py_spy):
     exit_code = int(exit_path.read_text().strip()) if exit_path.exists() else None
     state = read_json(run / "trainer_state.json")
     update = read_json(run / "adapter-update.json")
+    observed.extend(int(step) for step in re.findall(r"'step':\s*(\d+)", text))
     workers = []
     if live and py_spy.is_file():
         for child in children(launch["pid"]):
@@ -67,7 +68,8 @@ def snapshot(run, log, py_spy):
     return {
         "at": time.time(), "run": str(run), "source_commit": launch.get("source_commit", "unpublished"),
         "launcher_live": live, "exit_code": exit_code, "total_optimizer_updates": total,
-        "observed_optimizer_updates": max([0, state.get("global_step", 0), *observed]),
+        "observed_optimizer_updates": max([0, state.get("global_step", 0),
+                                            update.get("initial_global_step", 0), *observed]),
         "workers": workers,
         "baseline": {key: value for key, value in baseline.get("metrics", {}).items()
                      if key.endswith("/overall")},
