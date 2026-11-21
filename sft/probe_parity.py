@@ -194,18 +194,62 @@ def scores(args):
     print(json.dumps(report), flush=True)
 
 
+def score_loss(args):
+    import torch
+    import torch.nn.functional as functional
+    from safetensors import safe_open
+    from safetensors.torch import load_file
+
+    checkpoint = args.model or args.base
+    index = json.loads((checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
+    with safe_open(checkpoint / index["lm_head.weight"], framework="pt", device="cpu") as source:
+        head = source.get_tensor("lm_head.weight").to(torch.bfloat16).contiguous()
+    digest = hashlib.sha256(head.view(torch.uint8).numpy().tobytes()).hexdigest()
+    directory = args.output / args.variant
+    if digest != (directory / "head-sha256.txt").read_text().strip():
+        raise ValueError("Loss head does not belong to the harvested checkpoint")
+    head = head.to("cuda")
+    rows = [json.loads(line) for line in (args.probes / "probes.jsonl").read_text().splitlines()]
+    records, total_loss, total_tokens = [], 0.0, 0
+    with torch.inference_mode():
+        for position, row in enumerate(rows):
+            path = directory / f"{position:03}.safetensors"
+            with safe_open(path, framework="pt", device="cpu") as source:
+                if source.metadata()["sample_id"] != row["sample_id"]:
+                    raise ValueError("Harvested decision does not match the fixed probe")
+            state = load_file(path)
+            target, loss = state["target"], 0.0
+            for start in range(0, len(target), 128):
+                hidden = state["hidden"][start:start + 128].to("cuda")
+                ids = target[start:start + 128].to("cuda")
+                logp = functional.log_softmax(functional.linear(hidden, head).float(), dim=-1)
+                loss += float(-logp.gather(1, ids[:, None])[:, 0].double().sum())
+            records.append({"sample_id": row["sample_id"], "tokens": len(target), "ce": loss / len(target)})
+            total_loss += loss
+            total_tokens += len(target)
+    report = {"variant": args.variant, "checkpoint": str(checkpoint), "head_sha256": digest,
+              "probe_manifest_sha256": hashlib.sha256((args.probes / "probes.jsonl").read_bytes()).hexdigest(),
+              "probes": len(records), "target_tokens": total_tokens,
+              "target_token_mean_ce": total_loss / total_tokens,
+              "decision_macro_ce": sum(row["ce"] for row in records) / len(records),
+              "per_probe": records, "all_native_prefixes_preserved": True,
+              "scope": "Fixed masked targets with this checkpoint's own output head; no rollout quality claim"}
+    (args.output / f"loss-{args.variant}.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps({key: value for key, value in report.items() if key != "per_probe"}), flush=True)
+
+
 def main():
     from setproctitle import setproctitle
 
     setproctitle("python")
     faulthandler.register(signal.SIGUSR1, all_threads=True)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("harvest", "score"))
+    parser.add_argument("mode", choices=("harvest", "score", "loss"))
     for name in ("base", "probes", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--model", type=Path)
     parser.add_argument("--adapter", type=Path)
-    parser.add_argument("--variant", choices=("base", "peft", "merged"))
+    parser.add_argument("--variant", choices=("base", "peft", "merged", "full"))
     parser.add_argument("--layer-progress", action="store_true")
     parser.add_argument("--offload-layers", action="store_true",
                         help="Move decoder weights between CPU and CUDA without changing native prefixes")
@@ -213,7 +257,7 @@ def main():
     parser.add_argument("--reference-base", type=Path,
                         help="Also score preserved baseline states from the original Conv3d projection")
     args = parser.parse_args()
-    (harvest if args.mode == "harvest" else scores)(args)
+    {"harvest": harvest, "score": scores, "loss": score_loss}[args.mode](args)
 
 
 if __name__ == "__main__":
