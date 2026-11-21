@@ -29,14 +29,16 @@ def export_examples(args):
 
     training = [row for row in dataset.rows if row["split"] == "train"]
     chosen = {"initial": training[0]}
-    candidates = sorted((row for row in training if row["image_count"] <= 6 and row["token_count"] <= 65536),
-                        key=lambda row: (row["token_count"], row["sample_id"]))
+    candidates = sorted(training, key=lambda row: (row["token_count"], row["sample_id"]))
     for row in candidates:
         target = message(row)
         kind = category(target)
         if row["image_count"] and kind in ("image_read", "crop_related"):
             chosen.setdefault(kind, row)
-        if kind == "xml_related" and re.search(r"<(?:mxfile|mxGraphModel|mxCell)\b", json.dumps(target)):
+        arguments = json.dumps(target)
+        writes = any(call["function"]["name"] in ("write", "edit") for call in target.get("tool_calls", []))
+        writes = writes or re.search(r"write_text|\.write\s*\(|cat\s*>", arguments)
+        if kind == "xml_related" and writes and re.search(r"mxCell|mxGraphModel|<mxfile", arguments):
             chosen.setdefault("xml_construct", row)
         if row["stage"] == 2 and row["image_count"]:
             chosen.setdefault("after_reviewer", row)
