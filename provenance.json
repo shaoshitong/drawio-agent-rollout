@@ -635,6 +635,11 @@
       "path": "sft/check_native_prefixes.py",
       "source": "CPU native-prefix equivalence checker; does not change active SFT inputs",
       "sha256": "3a334febaf31d0753dbd0aad1a8f26590343e6f39cdcc092bc992a4c33b47996"
+    },
+    {
+      "path": "sft/plot_loss.py",
+      "source": "SFT loss visualization",
+      "sha256": "ced25f6feee80bbef195425a32b77d61a1ebad3cea13a9ee0ae7f4f7a40f320d"
     }
   ]
 }
