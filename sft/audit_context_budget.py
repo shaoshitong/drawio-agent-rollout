@@ -161,7 +161,7 @@ def snapshot_state(reader, row, original, candidate):
     if request != row["request_ref"]:
         raise ValueError("Snapshot ledger request differs from the audited decision")
     files = reader.store.get(reference)
-    image_refs = {image[1] for image in reader.context(row)["images"]}
+    image_refs = {blob_ref for _, _, blob_ref in reader.context(row)["images"]}
     original_text, candidate_text = json.dumps(original, ensure_ascii=False), json.dumps(candidate, ensure_ascii=False)
     result = {"stage": stage, "snapshot_ref": reference, "files": [],
               "visibility_method": "Exact XML substring or raw PNG blob identity; conservative lower bounds."}
