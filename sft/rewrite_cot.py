@@ -13,7 +13,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .causal_cot import (POLICY, answer_fields, copy_edits, digest, fragments,
+from .causal_cot import (POLICY, anchors, answer_fields, digest, fragments,
                          mechanical_feedback, message_key, payload, rewrite_history)
 from .check_prefix_chains import Reader
 from .data import load_manifest
@@ -115,7 +115,7 @@ class Rewriter:
                            target_tokens=max(48, round(self.count(source) * 0.35)), seed=42 + attempt)
             try:
                 generated = self.request(body, folder, {**scope, "operation": "compress", "attempt": attempt})
-                candidate, edit_proof = copy_edits(source, json.loads(generated)["edits"])
+                candidate = json.loads(generated)["compressed_reasoning"]
                 proposal = candidate
                 checks = mechanical_feedback(source, candidate, known)
                 shorter = self.count(candidate) < self.count(source)
@@ -132,12 +132,12 @@ class Rewriter:
             except (KeyError, ValueError, TypeError):
                 faithful, judge = False, {"invalid_judge_json": judge_text}
             passed = faithful and not any(checks.values()) and shorter
-            attempts.append({"candidate": candidate, "edit_proof": edit_proof, "checks": checks, "judge": judge,
+            attempts.append({"candidate": candidate, "checks": checks, "judge": judge,
+                             "omitted_source_anchors": sorted(anchors(source) - anchors(candidate)),
                              "shorter": shorter, "passed": passed})
             if passed:
                 return candidate, {**scope, "outcome": "compressed", "attempts": attempts}
-            feedback = json.dumps({"checks": checks, "judge": judge, "must_be_shorter": not shorter,
-                                   "rejected_edits": edit_proof["rejected_edits"]})
+            feedback = json.dumps({"checks": checks, "judge": judge, "must_be_shorter": not shorter})
         return source, {**scope, "outcome": "source_retained_after_failed_verification", "attempts": attempts}
 
     def decision(self, row, reader, prior, folder):
