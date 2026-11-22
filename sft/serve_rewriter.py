@@ -36,11 +36,15 @@ def main():
              "model": "Qwen/Qwen3.8-27B", "physical_gpus": [4, 5, 6, 7], "tensor_parallel": 4,
              "context_tokens": args.context_tokens, "port": args.port, "training": False,
              "request_concurrency": args.concurrency, "inventory_before": selected}
+    state.update(mamba_cache_size=max(16, args.concurrency * 2),
+                 batch_token_capacity=max(args.context_tokens, args.concurrency * 16384))
     status = args.output / "status.json"
     status.write_text(json.dumps(state, indent=2) + "\n")
     server, log = start_server(args.root, args.output / "model", "generator", "Qwen3.8-27B",
         "4,5,6,7", args.port, args.context_tokens, 0.65, environment(args.root), sampling="qwen38",
-        extra_args=("--max-running-requests", str(args.concurrency), "--cuda-graph-max-bs", str(args.concurrency)))
+        extra_args=("--max-running-requests", str(args.concurrency), "--cuda-graph-max-bs", str(args.concurrency),
+                    "--max-mamba-cache-size", str(state["mamba_cache_size"]),
+                    "--max-total-tokens", str(state["batch_token_capacity"])))
     state.update(server_pid=server.pid, phase="loading")
     status.write_text(json.dumps(state, indent=2) + "\n")
 
