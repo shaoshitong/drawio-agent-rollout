@@ -6,6 +6,8 @@ from copy import deepcopy
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
+import sqlite3
 import time
 
 from .check_prefix_chains import Reader
@@ -38,11 +40,49 @@ def tool_result(message):
     )
 
 
-def clear_context(messages, reasoning=False, keep_results=None):
+def result_anchors(messages):
+    """Conservative audit candidates; these rules do not prove semantic sufficiency."""
+    calls = {call["id"]: call["function"] for message in messages
+             for call in message.get("tool_calls") or []}
+    groups = {name: set() for name in ("skill", "review", "error", "latest_xml", "latest_render",
+                                     "latest_per_tool", "unmatched_result")}
+    latest, xml, rendered = {}, [], []
+    for index, message in enumerate(messages):
+        if not tool_result(message):
+            continue
+        function = calls.get(message.get("tool_call_id"))
+        if function is None:
+            groups["unmatched_result"].add(index)
+            continue
+        name, arguments = function["name"], json.dumps(function.get("arguments", {}))
+        latest[name] = index
+        content = message.get("content") or ""
+        text = content if isinstance(content, str) else "".join(part.get("text", "") for part in content)
+        if name == "skill":
+            groups["skill"].add(index)
+        if "review1.json" in arguments or "review2.json" in arguments:
+            groups["review"].add(index)
+        if re.search(r'Traceback \(most recent call last\)|Process exited with code [1-9]|'
+                     r'"exit_code"\s*:\s*[1-9]|"is_error"\s*:\s*true|^\s*(?:Error|ERROR|Exception):',
+                     text, re.M):
+            groups["error"].add(index)
+        if "<mxfile" in text or "<mxGraphModel" in text:
+            xml.append(index)
+        if "png_sha256" in text or "official_drawio" in text or (
+                "render" in arguments and ".drawio" in arguments):
+            rendered.append(index)
+    groups["latest_per_tool"].update(latest.values())
+    groups["latest_xml"].update(xml[-1:])
+    groups["latest_render"].update(rendered[-1:])
+    return {name: sorted(indices) for name, indices in groups.items()}
+
+
+def clear_context(messages, reasoning=False, keep_results=None, protected=()):
     """Counterfactual only: preserve calls, images, roles and result containers."""
     messages = deepcopy(messages)
     results = [index for index, message in enumerate(messages) if tool_result(message)]
     old = set(results[:-keep_results] if keep_results else results) if keep_results is not None else set()
+    old.difference_update(protected)
     for index, message in enumerate(messages):
         content = message.get("content") or ""
         if reasoning and message["role"] == "assistant":
@@ -80,14 +120,15 @@ def render(processor, messages, completion, tools, kwargs):
     return count + target_count, sha256(target.encode()).hexdigest(), target_count
 
 
-def verify_images(processor, reader, row, expected, keep):
+def verify_images(processor, reader, row, expected, keep, protect=False):
     from .data import token_sha256
     from .export_sft import normalize
 
     request, response = reader.store.get(row["request_ref"]), reader.store.get(row["response_ref"])
     prompt, images = normalize(request["messages"], decode_images=False)
     completion, _ = normalize([response["choices"][0]["message"]], decode_images=False)
-    prompt = clear_context(prompt, keep_results=keep)
+    protected = set().union(*result_anchors(prompt).values()) if protect else set()
+    prompt = clear_context(prompt, keep_results=keep, protected=protected)
     kwargs = {**row.get("chat_template_kwargs", {"enable_thinking": True}), "tools": request.get("tools", [])}
     count, target_hash, target_count = render(processor, prompt, completion, request.get("tools", []), kwargs)
     if target_hash != expected["target_sha256"]:
@@ -96,7 +137,8 @@ def verify_images(processor, reader, row, expected, keep):
     encoded = processor(text=[text], images=images, truncation=False, padding=False,
                         add_special_tokens=False, return_tensors="pt")
     total = encoded["input_ids"].shape[-1] + target_count
-    prediction = expected["variants"][f"clear_tool_text_keep_{keep}"]
+    name = "protected_tool_text" if protect else "clear_tool_text"
+    prediction = expected["variants"][f"{name}_keep_{keep}"]
     if count != prediction["text_tokens"]:
         raise ValueError("Native image materialization changed text tokenization")
     estimate = prediction["estimated_total_with_fixed_image_expansion"]
@@ -104,9 +146,35 @@ def verify_images(processor, reader, row, expected, keep):
         raise ValueError("Fixed-image token estimate differs from native processing")
     result = {"token_count": total, "image_count": len(images), "target_sha256": target_hash,
               "prompt_token_sha256": token_sha256(encoded["input_ids"][0]),
-              "image_grid_thw": encoded["image_grid_thw"].tolist(), "keep_results": keep}
+              "image_grid_thw": encoded["image_grid_thw"].tolist(), "keep_results": keep,
+              "protected_result_count": len(protected), "variant": name}
     for image in images:
         image.close()
+    return result
+
+
+def snapshot_state(reader, row, original, candidate):
+    database = reader.store.root / "ledger.sqlite"
+    with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
+        reference, stage = connection.execute("select artifacts,stage from calls where id=?",
+                                              (row["call_id"],)).fetchone()
+    files = reader.store.get(reference)
+    image_refs = {image[1] for image in reader.context(row)["images"]}
+    original_text, candidate_text = json.dumps(original, ensure_ascii=False), json.dumps(candidate, ensure_ascii=False)
+    result = {"stage": stage, "snapshot_ref": reference, "files": [],
+              "visibility_method": "Exact XML substring or raw PNG blob identity; conservative lower bounds."}
+    for name, digest in files.items():
+        if Path(name).name not in (f"round{stage}.drawio", f"round{stage}.png", "review1.json"):
+            continue
+        raw = reader.store.raw(digest)
+        item = {"name": name, "sha256": sha256(raw).hexdigest(), "bytes": len(raw)}
+        if name.endswith(".drawio"):
+            text = json.dumps(raw.decode().strip(), ensure_ascii=False)[1:-1]
+            item.update(exact_xml_visible_original=text in original_text,
+                        exact_xml_visible_candidate=text in candidate_text)
+        if name.endswith(".png"):
+            item["raw_render_blob_in_input_images"] = digest in image_refs
+        result["files"].append(item)
     return result
 
 
@@ -116,11 +184,13 @@ def audit(args):
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
     readers, records = {}, []
     rows = json.loads(args.manifest.read_text())
-    variants = [("clear_history_reasoning", True, None)] + [
-        (f"{kind}_keep_{keep}", reasoning, keep)
+    variants = [("clear_history_reasoning", True, None, False)] + [
+        (f"{kind}_keep_{keep}", reasoning, keep, False)
         for keep in args.keep_results
         for kind, reasoning in (("clear_tool_text", False), ("clear_both", True))
     ]
+    if args.protect_anchors:
+        variants += [(f"protected_tool_text_keep_{keep}", False, keep, True) for keep in args.keep_results]
     for row in rows:
         root = row["snapshot_root"]
         if root not in readers:
@@ -137,8 +207,11 @@ def audit(args):
         record = {"sample_id": row["sample_id"], "original_text_tokens": original,
                   "original_total_tokens": row.get("token_count"), "target_tokens": target_count,
                   "target_sha256": target_hash, "variants": {}}
-        for name, reasoning, keep in variants:
-            candidate = clear_context(prompt, reasoning, keep)
+        anchors = result_anchors(prompt) if args.protect_anchors else {}
+        record["result_anchors"] = anchors
+        protected = set().union(*anchors.values())
+        for name, reasoning, keep, protect in variants:
+            candidate = clear_context(prompt, reasoning, keep, protected if protect else ())
             count, candidate_hash, _ = render(processor, candidate, completion, tools, kwargs)
             if candidate_hash != target_hash:
                 raise ValueError("Context clearing changed current target")
@@ -151,7 +224,11 @@ def audit(args):
             }
         if args.verify_keep_results is not None:
             record["native_image_verification"] = verify_images(
-                processor, reader, row, record, args.verify_keep_results)
+                processor, reader, row, record, args.verify_keep_results, args.protect_anchors)
+        if args.snapshot_artifacts:
+            keep = args.verify_keep_results or max(args.keep_results)
+            candidate = clear_context(prompt, keep_results=keep, protected=protected)
+            record["snapshot_state"] = snapshot_state(reader, row, prompt, candidate)
         records.append(record)
         print(json.dumps({"measured": len(records), "total": len(rows)}), flush=True)
     report = {"at": time.time(), "records": records, "context_limit": args.context,
@@ -160,10 +237,14 @@ def audit(args):
               "known_total_fits": dict(Counter(name for row in records for name, value in
                   row["variants"].items() if value["estimated_fits_context"])),
               "limitations": ["Token-budget counterfactuals, not recovered training examples.",
-                  "Image expansion held fixed; pixels and grids not reprocessed.",
+                  "Budget variants hold image expansion fixed; the selected native variant reprocesses images.",
                   "Targets may reference cleared history; semantic validity is not established.",
+                  "Protected XML is the latest visible XML output, not a certified current file snapshot.",
                   "A context policy must also be implemented and verified in inference."],
               "training_modified": False, "raw_text_exported": False}
+    native = [row["native_image_verification"] for row in records if "native_image_verification" in row]
+    report["native_summary"] = {"verified": len(native),
+                                "fits_context": sum(row["token_count"] <= args.context for row in native)}
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({"output": str(args.output), "known_total_fits": report["known_total_fits"]}))
 
@@ -174,8 +255,13 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--keep-results", nargs="+", type=int, default=[4, 8, 16])
     parser.add_argument("--verify-keep-results", type=int, choices=[4, 8, 16])
+    parser.add_argument("--protect-anchors", action="store_true")
+    parser.add_argument("--snapshot-artifacts", action="store_true")
     parser.add_argument("--context", type=int, default=262144)
-    audit(parser.parse_args())
+    args = parser.parse_args()
+    if args.verify_keep_results is not None:
+        args.keep_results = sorted(set(args.keep_results + [args.verify_keep_results]))
+    audit(args)
 
 
 if __name__ == "__main__":
