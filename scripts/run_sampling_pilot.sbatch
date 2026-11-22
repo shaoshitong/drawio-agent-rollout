@@ -21,8 +21,9 @@ trap 'printf "%s\n" "$?" > "$outputs/exit-code"' EXIT
 for arm in D0 B3; do
   output="$outputs/$arm"
   mkdir -p "$output"
+  manifest=$("$base/env/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest"])' "$plan/$arm.json")
   bash "$source_root/scripts/run_sft.sh" train --config "$plan/$arm.json" \
-    --output "$output" > "$output/run.log" 2>&1 &
+    --manifest "$manifest" --output "$output" > "$output/run.log" 2>&1 &
   child=$!
   printf '{"arm":"%s","pid":%s,"slurm_job_id":"%s"}\n' \
     "$arm" "$child" "$SLURM_JOB_ID" > "$outputs/active.json"
