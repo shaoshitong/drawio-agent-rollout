@@ -11,6 +11,29 @@ import sqlite3
 import time
 
 from .check_prefix_chains import Reader
+from .data import load_manifest
+
+
+def prepare_rejected_manifest(curriculum, decisions, rejections, output):
+    """Select overcontext decisions with their original archive roots and measurements."""
+    metadata = {row["episode"]: {key: row[key] for key in
+                ("snapshot_root", "split", "final_components", "chat_template_kwargs")}
+                for row in load_manifest(curriculum)}
+    source = {f"{row['episode']}:{row['call_id']}": row for row in load_manifest(decisions)}
+    selected = []
+    for rejected in load_manifest(rejections):
+        if rejected["rejection"] not in ("multimodal_sequence_exceeds_context", "text_exceeds_context"):
+            continue
+        row = source[rejected["sample_id"]]
+        selected.append({**metadata[row["episode"]],
+            **{key: row[key] for key in ("episode", "call_id", "stage", "request_ref", "response_ref")},
+            **rejected})
+    output.write_text(json.dumps(selected, indent=2) + "\n")
+    return {"records": len(selected), "rejections": dict(Counter(row["rejection"] for row in selected)),
+            "splits": dict(Counter(row["split"] for row in selected)),
+            "source_files": {str(path): sha256(path.read_bytes()).hexdigest()
+                             for path in (curriculum, decisions, rejections)},
+            "output_sha256": sha256(output.read_bytes()).hexdigest(), "training_modified": False}
 
 
 def template_messages(messages):
