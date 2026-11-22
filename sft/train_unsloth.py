@@ -486,7 +486,12 @@ def train(config, model, processor, examples, collator, output):
         data_collator=collator, args=args, callbacks=[UpdateEvidence()],
     )
     if config.get("activation_offloading"):
-        trainer.maybe_activation_offload_context.use_streams = False
+        from trl.models.activation_offloading import OffloadActivations
+
+        # Trainer already installed the output-head exclusion hooks.
+        offload = OffloadActivations(use_streams=False)
+        offload.update_model_params(trainer.model)
+        trainer.maybe_activation_offload_context = offload
     if config.get("full_finetuning"):
         # The fused Qwen forward consumes this count, but the bare HF model
         # declares False. Set the Trainer flag after all Unsloth init patches.
