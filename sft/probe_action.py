@@ -41,17 +41,19 @@ def run(args):
     started = time.time()
     print(json.dumps({"generation_started": True, "sample_id": args.sample_id,
                       "variant": args.variant, "prompt_tokens": prompt_tokens}), flush=True)
-    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        sequences = model.generate(**batch, do_sample=False, use_cache=True, logits_to_keep=1,
-            max_new_tokens=args.max_new_tokens, stopping_criteria=StoppingCriteriaList([stop]))
-    continuation = sequences[0, prompt_tokens:]
-    text = processor.tokenizer.decode(continuation, skip_special_tokens=False)
     eos = model.generation_config.eos_token_id
     eos = eos if isinstance(eos, list) else [eos]
+    eos = sorted({token for token in [*eos, processor.tokenizer.eos_token_id] if token is not None})
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+        sequences = model.generate(**batch, do_sample=False, use_cache=True, logits_to_keep=1,
+            max_new_tokens=args.max_new_tokens, eos_token_id=eos,
+            stopping_criteria=StoppingCriteriaList([stop]))
+    continuation = sequences[0, prompt_tokens:]
+    text = processor.tokenizer.decode(continuation, skip_special_tokens=False)
     action_text = text.split("</think>", 1)[-1]
     closed = "<tool_call>" in action_text and "</tool_call>" in action_text
     record = {"sample_id": args.sample_id, "variant": args.variant, "prompt_tokens": prompt_tokens,
-        "generated_tokens": len(continuation), "max_new_tokens": args.max_new_tokens,
+        "generated_tokens": len(continuation), "max_new_tokens": args.max_new_tokens, "eos_token_ids": eos,
         "finish_reason": "first_tool_call" if closed else "eos" if int(continuation[-1]) in eos else "length",
         "tool_names": re.findall(r"<function=([^>]+)>", action_text),
         "crop_marker": bool(re.search(r"\.crop\s*\(", action_text)),
