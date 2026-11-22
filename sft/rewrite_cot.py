@@ -1,7 +1,6 @@
 """Rewrite teacher reasoning chronologically; never expose the current answer."""
 
 import argparse
-import base64
 import fcntl
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,7 +13,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .causal_cot import (POLICY, answer_fields, copy_edits, digest, evidence, fragments,
+from .causal_cot import (POLICY, answer_fields, copy_edits, digest, fragments,
                          mechanical_feedback, message_key, payload, rewrite_history)
 from .check_prefix_chains import Reader
 from .data import load_manifest
@@ -50,16 +49,6 @@ def select_rows(data):
     return sorted(rows, key=lambda row: (row["episode_order"], row["call_id"]))
 
 
-def resolve_images(value, reader):
-    if isinstance(value, tuple) and value[0] == "image_blob":
-        return value[1] + "," + base64.b64encode(reader.store.raw(value[2])).decode()
-    if isinstance(value, dict):
-        return {key: resolve_images(item, reader) for key, item in value.items()}
-    if isinstance(value, list):
-        return [resolve_images(item, reader) for item in value]
-    return value
-
-
 def parse_judge(text):
     text = text.strip()
     if text.startswith("```"):
@@ -82,8 +71,7 @@ class Rewriter:
     def count(self, text):
         return len(self.tokenizer(text, add_special_tokens=False)["input_ids"])
 
-    def request(self, body, reader, folder, scope):
-        body = resolve_images(body, reader)
+    def request(self, body, folder, scope):
         reference = self.store.put(body)
         started = time.time()
         record = {**scope, "started": started, "request_ref": reference,
@@ -111,11 +99,11 @@ class Rewriter:
                 stream.write(json.dumps(record) + "\n")
             self.store.metadata("last_request", record["ended"])
 
-    def fragment(self, part, context, previous, reader, folder, sample_id):
+    def fragment(self, part, previous, folder, sample_id, request_ref):
         source = part["text"]
         scope = {"sample_id": sample_id, "source_start": part["start"],
                  "source_end": part["end"], "source_sha256": digest(source),
-                 "causal_history_sha256": digest(context), "previous_sha256": digest(previous)}
+                 "archived_request_ref": request_ref, "previous_sha256": digest(previous)}
         if self.count(source) <= 96:
             return source, {**scope, "outcome": "already_short", "attempts": []}
         if not part["boundary_safe"]:
@@ -123,37 +111,39 @@ class Rewriter:
         feedback, proposal, attempts = None, None, []
         known = previous
         for attempt in range(2):
-            body = payload(context, previous, source, feedback=feedback, candidate=proposal,
+            body = payload(previous, source, feedback=feedback, candidate=proposal,
                            target_tokens=max(48, round(self.count(source) * 0.35)), seed=42 + attempt)
             try:
-                generated = self.request(body, reader, folder, {**scope, "operation": "compress", "attempt": attempt})
+                generated = self.request(body, folder, {**scope, "operation": "compress", "attempt": attempt})
                 candidate, edit_proof = copy_edits(source, json.loads(generated)["edits"])
                 proposal = candidate
                 checks = mechanical_feedback(source, candidate, known)
-                judge_body = payload(context, previous, source, operation="judge", candidate=candidate)
-                judge_text = self.request(judge_body, reader, folder, {**scope, "operation": "judge", "attempt": attempt})
+                shorter = self.count(candidate) < self.count(source)
+                judge_text = None
+                if shorter and not any(checks.values()):
+                    judge_body = payload(previous, source, operation="judge", candidate=candidate)
+                    judge_text = self.request(judge_body, folder, {**scope, "operation": "judge", "attempt": attempt})
             except (IncompleteRewrite, json.JSONDecodeError, KeyError) as error:
                 feedback = str(error)
                 attempts.append({"passed": False, "error": feedback})
                 continue
             try:
-                faithful, judge = parse_judge(judge_text)
+                faithful, judge = parse_judge(judge_text) if judge_text else (False, {"not_run": "mechanical_check_failed"})
             except (KeyError, ValueError, TypeError):
                 faithful, judge = False, {"invalid_judge_json": judge_text}
-            shorter = self.count(candidate) < self.count(source)
             passed = faithful and not any(checks.values()) and shorter
             attempts.append({"candidate": candidate, "edit_proof": edit_proof, "checks": checks, "judge": judge,
                              "shorter": shorter, "passed": passed})
             if passed:
                 return candidate, {**scope, "outcome": "compressed", "attempts": attempts}
-            feedback = json.dumps({"checks": checks, "judge": judge, "must_be_shorter": not shorter})
+            feedback = json.dumps({"checks": checks, "judge": judge, "must_be_shorter": not shorter,
+                                   "rejected_edits": edit_proof["rejected_edits"]})
         return source, {**scope, "outcome": "source_retained_after_failed_verification", "attempts": attempts}
 
     def decision(self, row, reader, prior, folder):
         source_request = reader.value(row["request_ref"])
         original = reader.value(row["response_ref"])["choices"][0]["message"]
         history, matches = rewrite_history(source_request["messages"], prior)
-        context = evidence(history)
         source = original.get("reasoning_content") or ""
         parts = list(fragments(source, self.tokenizer, self.args.block_tokens))
         if "".join(part["text"] for part in parts) != source:
@@ -161,7 +151,7 @@ class Rewriter:
         compact, audits = [], []
         reused = message_key(original) in prior
         for part in [] if reused else parts:
-            text, audit = self.fragment(part, context, "".join(compact), reader, folder, row["sample_id"])
+            text, audit = self.fragment(part, "".join(compact), folder, row["sample_id"], row["request_ref"])
             compact.append(text + "\n" if audit["outcome"] == "compressed" else text)
             audits.append(audit)
         reasoning = prior[message_key(original)] if reused else "".join(compact)
