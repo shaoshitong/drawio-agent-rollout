@@ -1,6 +1,7 @@
 """Bound a decision prefix using only its history and its own pre-request files."""
 
 import base64
+from bisect import bisect_left
 from copy import deepcopy
 from functools import lru_cache
 from hashlib import sha256
@@ -65,6 +66,24 @@ def latest_error(cycles):
 
 def keep_lines(lines, tokenizer, budget):
     lines = list(lines)
+    source = "\n".join(lines)
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    normalized = backend.normalizer.normalize_str(source) if backend and backend.normalizer else source
+    if backend and normalized == source:
+        encoded = tokenizer(source, add_special_tokens=False, return_offsets_mapping=True)
+        offsets = encoded["offset_mapping"]
+        starts = [start for start, _ in offsets]
+        boundaries = {span[0] for _, span in backend.pre_tokenizer.pre_tokenize_str(source)}
+        position = 0
+        for line in lines:
+            index = bisect_left(starts, position)
+            aligned = position in boundaries and (index == 0 or offsets[index - 1][1] <= position)
+            count = len(starts) - index if aligned else len(
+                tokenizer(source[position:], add_special_tokens=False)["input_ids"])
+            if count <= budget:
+                return source[position:]
+            position += len(line) + 1
+        return ""
     while lines and len(tokenizer("\n".join(lines), add_special_tokens=False)["input_ids"]) > budget:
         lines.pop(0)
     return "\n".join(lines)

@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--port", type=int, default=32527)
     parser.add_argument("--context-tokens", type=int, default=262144)
+    parser.add_argument("--concurrency", type=int, default=4)
     args = parser.parse_args()
     inventory = gpu_inventory()
     selected = [row for row in inventory if row["index"] in (4, 5, 6, 7)]
@@ -33,12 +34,13 @@ def main():
     args.output.mkdir(parents=True, exist_ok=False)
     state = {"at": time.time(), "source_commit": args.source_commit, "controller_pid": os.getpid(),
              "model": "Qwen/Qwen3.8-27B", "physical_gpus": [4, 5, 6, 7], "tensor_parallel": 4,
-             "context_tokens": args.context_tokens, "port": args.port, "training": False, "inventory_before": selected}
+             "context_tokens": args.context_tokens, "port": args.port, "training": False,
+             "request_concurrency": args.concurrency, "inventory_before": selected}
     status = args.output / "status.json"
     status.write_text(json.dumps(state, indent=2) + "\n")
     server, log = start_server(args.root, args.output / "model", "generator", "Qwen3.8-27B",
         "4,5,6,7", args.port, args.context_tokens, 0.65, environment(args.root), sampling="qwen38",
-        extra_args=("--max-running-requests", "4", "--cuda-graph-max-bs", "4"))
+        extra_args=("--max-running-requests", str(args.concurrency), "--cuda-graph-max-bs", str(args.concurrency)))
     state.update(server_pid=server.pid, phase="loading")
     status.write_text(json.dumps(state, indent=2) + "\n")
 
