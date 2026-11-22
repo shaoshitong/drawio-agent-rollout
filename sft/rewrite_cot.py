@@ -8,6 +8,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import random
 import threading
 import time
 from urllib.error import HTTPError, URLError
@@ -17,6 +18,7 @@ from .causal_cot import (POLICY, anchors, answer_fields, digest, fragments,
                          mechanical_feedback, message_key, payload, rewrite_history)
 from .check_prefix_chains import Reader
 from .data import load_manifest
+from .history import HISTORY_POLICY
 from .store import Store
 
 
@@ -45,6 +47,7 @@ def select_rows(data):
         if not row.get("supervision_eligible", True):
             continue
         rows.append({**row, **metadata[row["episode"]],
+                     "history_policy": HISTORY_POLICY,
                      "sample_id": f"{row['episode']}:{row['call_id']}"})
     return sorted(rows, key=lambda row: (row["episode_order"], row["call_id"]))
 
@@ -216,6 +219,8 @@ def main():
     parser.add_argument("--endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--block-tokens", type=int, default=768)
+    parser.add_argument("--sample-decisions", type=int, default=0,
+                        help="Frozen random train-only calibration; zero processes the full corpus")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     lease = (args.output / "worker.lock").open("a+")
@@ -225,10 +230,14 @@ def main():
     lease.write(str(os.getpid()) + "\n")
     lease.flush()
     rows = select_rows(args.data)
+    if args.sample_decisions:
+        rows = random.Random(20261122).sample([row for row in rows if row["split"] == "train"], args.sample_decisions)
+        rows.sort(key=lambda row: (row["episode_order"], row["call_id"]))
     plan = {"policy": POLICY, "source_commit": args.source_commit, "rows": len(rows),
             "source_index_sha256": digest(rows), "workers": args.workers, "block_tokens": args.block_tokens,
             "model": str(args.model), "endpoint": args.endpoint, "current_answer_available": False,
             "future_fragments_available": False, "training_started": False}
+    plan.update(calibration_only=bool(args.sample_decisions), selection_seed=20261122)
     plan_path = args.output / "plan.json"
     if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
         raise ValueError("Existing output belongs to another source or rewrite policy")
