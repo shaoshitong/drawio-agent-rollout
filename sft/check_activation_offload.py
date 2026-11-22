@@ -22,6 +22,7 @@ def run_trial(args, config, name, offload, indices):
     write_json(output / "config.json", config)
     env = dict(os.environ, DRAWIO_SFT_ROOT=str(args.root), DRAWIO_BASE_RUNTIME=str(args.runtime),
                DRAWIO_GPUS=os.environ["CUDA_VISIBLE_DEVICES"], DRAWIO_PROCESSES="1",
+               DRAWIO_SFT_MODULE="sft.train_unsloth",
                UNSLOTH_COMPILE_DISABLE="1", PYTHONDONTWRITEBYTECODE="1")
     command = ["bash", str(args.source / "scripts/run_sft.sh"), "train", "--config",
                str(output / "config.json"), "--manifest", config["manifest"], "--output", str(output)]
