@@ -156,8 +156,10 @@ def verify_images(processor, reader, row, expected, keep, protect=False):
 def snapshot_state(reader, row, original, candidate):
     database = reader.store.root / "ledger.sqlite"
     with sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True) as connection:
-        reference, stage = connection.execute("select artifacts,stage from calls where id=?",
-                                              (row["call_id"],)).fetchone()
+        reference, stage, request = connection.execute("select artifacts,stage,request from calls where id=?",
+            (int(row["sample_id"].rsplit(":", 1)[1]),)).fetchone()
+    if request != row["request_ref"]:
+        raise ValueError("Snapshot ledger request differs from the audited decision")
     files = reader.store.get(reference)
     image_refs = {image[1] for image in reader.context(row)["images"]}
     original_text, candidate_text = json.dumps(original, ensure_ascii=False), json.dumps(candidate, ensure_ascii=False)
