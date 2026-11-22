@@ -30,13 +30,14 @@ class InvalidReviewError(RuntimeError):
     pass
 
 
-def isolated_turn(command, endpoint, auth_file, logs, timeout, sampling=None):
+def isolated_turn(command, endpoint, auth_file, logs, timeout, sampling=None, preserve_tool_schema=False):
     """Keep host inference/control ports outside the model's network namespace."""
     headers = json.loads(auth_file.read_text())["headers"] if auth_file else {}
     with tempfile.TemporaryDirectory(prefix="dsh-gateway-") as directory:
         socket = Path(directory) / "generation.sock"
         gateway_env = dict(os.environ, SANDBOX_GATEWAY_HEADERS=json.dumps(headers))
         gateway_env["SANDBOX_GATEWAY_SAMPLING"] = json.dumps(sampling or {})
+        gateway_env["SANDBOX_GATEWAY_RAW_TOOLS"] = "1" if preserve_tool_schema else "0"
         with (logs / "gateway.log").open("wb") as gateway_log:
             gateway = subprocess.Popen(
                 [
@@ -312,7 +313,8 @@ def run_turn(args, role, number, session):
     if args.seed is not None:
         sampling["seed"] = args.seed
     try:
-        result = isolated_turn(command, endpoint, auth_file, logs, args.turn_timeout, sampling)
+        result = isolated_turn(command, endpoint, auth_file, logs, args.turn_timeout, sampling,
+                               role == "generator" and getattr(args, "preserve_tool_schema", False))
         exit_code, timed_out = result.returncode, False
     except subprocess.TimeoutExpired:
         exit_code, timed_out = 124, True

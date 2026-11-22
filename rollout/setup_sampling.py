@@ -16,9 +16,10 @@ SAMPLING = {
 }
 INSTRUCT_SAMPLING = dict(SAMPLING, temperature=0.7, top_p=0.8, presence_penalty=1.5)
 QWEN38_SAMPLING = dict(SAMPLING, temperature=1.0)
+RAW_TOOLS_TEMPLATE = "{% if drawio_raw_tools is defined %}{% set tools = drawio_raw_tools %}{% endif %}"
 
 
-def create_overlay(model, output, mode="precise-coding"):
+def create_overlay(model, output, mode="precise-coding", preserve_tool_schema=False):
     model, output = model.resolve(), output.resolve()
     if output == model or model in output.parents:
         raise ValueError("Serving overlay must be outside the original model directory")
@@ -32,10 +33,20 @@ def create_overlay(model, output, mode="precise-coding"):
             generation[key] = token
     sampling = {"instruct": INSTRUCT_SAMPLING, "qwen38": QWEN38_SAMPLING}.get(mode, SAMPLING)
     generation.update(sampling, do_sample=True)
+    template = None
+    if preserve_tool_schema:
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(model, local_files_only=True)
+        template = RAW_TOOLS_TEMPLATE + tokenizer.get_chat_template()
     output.mkdir(parents=True, exist_ok=False)
     for path in model.iterdir():
+        if path.name == "chat_template.jinja" and preserve_tool_schema:
+            continue
         if path.name != "generation_config.json":
             (output / path.name).symlink_to(path, target_is_directory=path.is_dir())
+    if template is not None:
+        (output / "chat_template.jinja").write_text(template)
     data = (json.dumps(generation, indent=2, sort_keys=True) + "\n").encode()
     (output / "generation_config.json").write_bytes(data)
     return {
@@ -46,6 +57,8 @@ def create_overlay(model, output, mode="precise-coding"):
         "loading": "SGLang --sampling-defaults model; explicit request values take priority",
         "presence_penalty": "Not read from generation_config by SGLang; pass --preferred-sampling-params",
         "mode": mode,
+        "preserve_tool_schema": preserve_tool_schema,
+        "chat_template_sha256": sha256(template.encode()).hexdigest() if template is not None else None,
         "output_budget": "Set DSH model maxTokens separately; this file does not set it",
     }
 
@@ -55,8 +68,10 @@ def main():
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--mode", choices=("precise-coding", "instruct", "qwen38"), default="precise-coding")
+    parser.add_argument("--preserve-tool-schema", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(create_overlay(args.model, args.output, args.mode), ensure_ascii=False, indent=2))
+    print(json.dumps(create_overlay(args.model, args.output, args.mode, args.preserve_tool_schema),
+                     ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

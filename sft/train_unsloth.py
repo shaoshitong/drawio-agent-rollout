@@ -581,6 +581,9 @@ def main():
     config = json.loads(args.config.read_text())
     config.update({key: str(value) if isinstance(value, Path) else value
                    for key, value in vars(args).items() if value is not None and key not in ("config", "mode")})
+    if config.get("allocator_conf"):
+        os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
+        os.environ["PYTORCH_ALLOC_CONF"] = config["allocator_conf"]
     if config.get("compile_enabled"):
         os.environ["UNSLOTH_COMPILE_DISABLE"] = "0"
         os.environ["UNSLOTH_COMPILE_LOCATION"] = config["compile_location"]

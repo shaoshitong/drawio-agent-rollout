@@ -27,7 +27,8 @@ from store import Store
 
 def start_model(args):
     serving = args.out / "serving"
-    create_overlay(args.model_path, serving, getattr(args, "sampling_preset", "precise-coding"))
+    create_overlay(args.model_path, serving, getattr(args, "sampling_preset", "precise-coding"),
+                   preserve_tool_schema=True)
     command = [sys.executable, "-m", "sglang.launch_server", "--model-path", str(serving),
                "--served-model-name", getattr(args, "generator_model", "Qwen/Qwen3.5-9B"),
                "--host", getattr(args, "host", "127.0.0.1"),
@@ -86,7 +87,7 @@ def evaluation_config(args, reviewer_url="", reviewer_auth=None):
         reasoning_effort=getattr(args, "reasoning_effort", "high"),
         preserve_thinking=getattr(args, "preserve_thinking", False), qwen38_effort="xhigh",
         sampling_preset=getattr(args, "sampling_preset", "precise-coding"), reviewer_sampling_preset="model", seed=42,
-        rounds=2, skill_mode="full", single_self_review=True, seeded=False,
+        rounds=2, skill_mode="full", single_self_review=True, seeded=False, preserve_tool_schema=True,
         resume=True, resume_note="", compaction_headroom_tokens=None, turn_timeout=21600)
 
 
@@ -111,6 +112,7 @@ def reconstruct(args, key):
         "reference_sha256": sha256(args.reference.read_bytes()).hexdigest(),
         "deployment": getattr(args, "deployment", "Checkpoint served in BF16; numerical PEFT/export parity not yet certified"),
         "reviewer_matches_teacher_model": True, "reviewer_budget_cny": 12}
+    protocol["preserve_raw_tool_schema"] = True
     save(args.out / "protocol.json", protocol)
     generator_session = reviewer_session = None
     try:

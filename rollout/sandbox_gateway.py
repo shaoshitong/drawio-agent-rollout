@@ -152,6 +152,11 @@ class Relay(BaseHTTPRequestHandler):
                 data = validate_images(body)
                 if self.server.sampling:
                     data.update(self.server.sampling)
+                if self.server.preserve_tool_schema and data.get("tools"):
+                    data["chat_template_kwargs"] = {
+                        **(data.get("chat_template_kwargs") or {}), "drawio_raw_tools": data["tools"],
+                    }
+                if self.server.sampling or self.server.preserve_tool_schema:
                     body = json.dumps(data, separators=(",", ":")).encode()
         except (OSError, ValueError, TypeError):
             self.send_error(400)
@@ -244,6 +249,7 @@ def configure(server, connection_factory, headers=None, validate=True, timeout=9
     server.validate_images = validate
     server.timeout_seconds = timeout
     server.sampling = sampling or {}
+    server.preserve_tool_schema = os.environ.get("SANDBOX_GATEWAY_RAW_TOOLS") == "1"
     audit = os.environ.get("ROLLOUT_API_WIRE_AUDIT")
     server.audit_path = Path(audit) if audit else None
     return server
