@@ -15,10 +15,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .causal_cot import (POLICY, anchors, answer_fields, digest, fragments,
-                         mechanical_feedback, message_key, payload, rewrite_history)
+                         mechanical_feedback, message_key, payload, rewrite_history, restore_source_commitments)
 from .check_prefix_chains import Reader
 from .data import load_manifest
 from .history import HISTORY_POLICY
+from .observation_context import ObservationContext, POLICY as CONTEXT_POLICY, apply_observations
 from .store import Store
 
 
@@ -70,6 +71,7 @@ class Rewriter:
         self.lock = threading.Lock()
         self.started = time.time()
         self.counts = defaultdict(int)
+        self.context = ObservationContext(self) if args.rewrite_observations else None
 
     def count(self, text):
         return len(self.tokenizer(text, add_special_tokens=False)["input_ids"])
@@ -119,6 +121,7 @@ class Rewriter:
             try:
                 generated = self.request(body, folder, {**scope, "operation": "compress", "attempt": attempt})
                 candidate = json.loads(generated)["compressed_reasoning"]
+                candidate, restored = restore_source_commitments(source, candidate)
                 proposal = candidate
                 checks = mechanical_feedback(source, candidate, known)
                 shorter = self.count(candidate) < self.count(source)
@@ -136,6 +139,7 @@ class Rewriter:
                 faithful, judge = False, {"invalid_judge_json": judge_text}
             passed = faithful and not any(checks.values()) and shorter
             attempts.append({"candidate": candidate, "checks": checks, "judge": judge,
+                             "restored_source_clauses": restored,
                              "omitted_source_anchors": sorted(anchors(source) - anchors(candidate)),
                              "shorter": shorter, "passed": passed})
             if passed:
@@ -147,6 +151,9 @@ class Rewriter:
         source_request = reader.value(row["request_ref"])
         original = reader.value(row["response_ref"])["choices"][0]["message"]
         history, matches = rewrite_history(source_request["messages"], prior)
+        observations = []
+        if self.context:
+            history, observations = self.context.rewrite(history, row["request_ref"])
         source = original.get("reasoning_content") or ""
         parts = list(fragments(source, self.tokenizer, self.args.block_tokens))
         if "".join(part["text"] for part in parts) != source:
@@ -164,15 +171,17 @@ class Rewriter:
                    if before.get("reasoning_content") != after.get("reasoning_content")]
         overlay = {"policy": POLICY, "request_ref": row["request_ref"], "response_ref": row["response_ref"],
                    "history": changes, "current_source_sha256": digest(source),
-                   "current_reasoning": reasoning}
+                   "current_reasoning": reasoning, "observations": observations,
+                   "context_policy": CONTEXT_POLICY if self.context else None}
         proof = {"sample_id": row["sample_id"], "original_reasoning_tokens": self.count(source),
                  "rewritten_reasoning_tokens": self.count(reasoning), "fragments": len(parts),
                  "reused_prior_reasoning": reused,
                  "compressed_fragments": sum(a["outcome"] == "compressed" for a in audits),
                  "fallback_fragments": sum(a["outcome"].startswith("source_retained") for a in audits),
                  "answer_fields_sha256": digest(answer_fields(original)), "answer_fields_unchanged": True,
-                 "history_answer_fields_unchanged": all(answer_fields(a) == answer_fields(b)
-                     for a, b in zip(source_request["messages"], history)), **matches,
+                 "observation_summaries": len(observations),
+                 "history_changes_match_observations": all(answer_fields(a) == answer_fields(b)
+                     for a, b in zip(apply_observations(source_request["messages"], observations), history)), **matches,
                  "audit_ref": self.store.put(audits), "at": time.time()}
         self.store.metadata(row["sample_id"], proof)
         return {"row": {**row, "reasoning_rewrite": {"root": str(self.store.root.resolve()),
@@ -219,6 +228,7 @@ def main():
     parser.add_argument("--endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--block-tokens", type=int, default=768)
+    parser.add_argument("--rewrite-observations", action="store_true")
     parser.add_argument("--sample-decisions", type=int, default=0,
                         help="Frozen random train-only calibration; zero processes the full corpus")
     args = parser.parse_args()
@@ -238,6 +248,7 @@ def main():
             "model": str(args.model), "endpoint": args.endpoint, "current_answer_available": False,
             "future_fragments_available": False, "training_started": False}
     plan.update(calibration_only=bool(args.sample_decisions), selection_seed=20261122)
+    plan["context_policy"] = CONTEXT_POLICY if args.rewrite_observations else None
     plan_path = args.output / "plan.json"
     if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
         raise ValueError("Existing output belongs to another source or rewrite policy")

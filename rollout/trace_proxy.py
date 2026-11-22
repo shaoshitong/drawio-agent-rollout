@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import count
 import json
 from pathlib import Path
+import sys
 import time
 from urllib.parse import urlsplit
 
@@ -67,6 +68,20 @@ class Proxy(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         data = json.loads(body)
+        if self.server.strip_history or self.server.context_policy:
+            from sft.history import strip_history_thinking
+            from sft.causal_cot import digest
+
+            data["messages"] = strip_history_thinking(data["messages"])
+            if self.server.context_policy:
+                try:
+                    data["messages"], _ = self.server.context_policy.rewrite(data["messages"], digest(data["messages"]))
+                except Exception as error:
+                    with self.server.audit.open("a") as log:
+                        log.write(json.dumps({"context_error": type(error).__name__, "at": time.time()}) + "\n")
+                    self.send_error(502, "Context preprocessing failed")
+                    return
+            body = json.dumps(data, ensure_ascii=False).encode()
         record = {
             "request_number": next(self.server.request_counter),
             "timestamp": time.time(),
@@ -169,11 +184,29 @@ def main():
     parser.add_argument("--audit", required=True, type=Path)
     parser.add_argument("--capture-raw", action="store_true")
     parser.add_argument("--request-limit", type=int, default=0)
+    parser.add_argument("--strip-history-thinking", action="store_true")
+    parser.add_argument("--context-cache", type=Path)
+    parser.add_argument("--context-model", type=Path)
+    parser.add_argument("--context-source-commit")
+    parser.add_argument("--context-endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     args = parser.parse_args()
+    if args.strip_history_thinking or args.context_cache:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Proxy)
     server.upstream = urlsplit(args.upstream)
     server.audit = args.audit
     server.capture_raw = args.capture_raw
+    server.strip_history, server.context_policy = args.strip_history_thinking, None
+    if args.context_cache:
+        from types import SimpleNamespace
+        from sft.rewrite_cot import Rewriter
+        from sft.observation_context import ObservationContext
+
+        if not args.context_model or not args.context_source_commit:
+            parser.error("context-cache requires context-model and context-source-commit")
+        editor = Rewriter(SimpleNamespace(model=args.context_model, output=args.context_cache,
+            endpoint=args.context_endpoint, source_commit=args.context_source_commit, rewrite_observations=False))
+        server.context_policy = ObservationContext(editor)
     server.request_counter, server.request_limit, server.limit_reached = count(1), args.request_limit, False
     server.serve_forever()
 

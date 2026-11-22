@@ -11,6 +11,7 @@ from .causal_cot import anchors, answer_fields, apply_rewrite, digest, numbers, 
 from .check_prefix_chains import Reader
 from .data import load_manifest, open_store
 from .history import HISTORY_POLICY, strip_history_thinking
+from .observation_context import apply_observations
 
 
 def visible_text(message):
@@ -42,9 +43,10 @@ def audit_row(row, reader, store, processor):
     compact = response["choices"][0]["message"]
     if answer_fields(original) != answer_fields(compact):
         raise ValueError("Current nonreasoning fields changed: " + row["sample_id"])
-    if len(request["messages"]) != len(original_request["messages"]) or any(
+    expected_history = apply_observations(original_request["messages"], overlay.get("observations", []))
+    if len(request["messages"]) != len(expected_history) or any(
             answer_fields(a) != answer_fields(b)
-            for a, b in zip(request["messages"], original_request["messages"])):
+            for a, b in zip(request["messages"], expected_history)):
         raise ValueError("Historical nonreasoning fields changed: " + row["sample_id"])
     options = {**row.get("chat_template_kwargs", {}), "tokenize": False,
                "tools": original_request.get("tools", [])}
@@ -63,12 +65,15 @@ def audit_row(row, reader, store, processor):
             "answer_sha256": digest(answer_fields(original)), "native_answer_sha256": digest(before),
             "answer_overlap_values": len(overlap), "omitted_answer_overlap_values": len(overlap - numbers(rewritten)),
             "omitted_source_anchors": len(anchors(source) - anchors(rewritten)),
-            "answer_fields_exact": True, "history_nonreasoning_fields_exact": True, "native_answer_exact": True}
+            "answer_fields_exact": True, "history_changes_match_audited_observations": True,
+            "observation_summaries": len(overlay.get("observations", [])), "native_answer_exact": True}
 
 
 def audit_wire(root, store):
     counts = Counter()
-    for path in sorted((root / "episodes").glob("*/requests.jsonl")):
+    paths = list((root / "episodes").glob("*/requests.jsonl"))
+    paths += list((root / "context-cache").glob("requests.jsonl"))
+    for path in sorted(paths):
         for line in path.read_text().splitlines():
             record = json.loads(line)
             body = store.get(record["request_ref"])

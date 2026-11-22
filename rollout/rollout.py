@@ -147,6 +147,8 @@ def run_turn(args, role, number, session):
             profile["stream_idle_timeout_ms"] = args.turn_timeout * 1000
         if role == "generator" and args.compaction_headroom_tokens is not None:
             profile["compaction_headroom_tokens"] = args.compaction_headroom_tokens
+        if role == "generator" and getattr(args, "no_auto_compaction", False):
+            profile["auto_compaction"] = False
     patch.write_text(builder(**profile))
     prompt = generation_prompt(number, args.rounds) if role == "generator" else review_prompt(number)
     prompt = prompt_for_mode(args.skill_mode, role, number, args.rounds, prompt)
@@ -445,6 +447,7 @@ def main():
     parser.add_argument("--qwen38-effort", choices=("xhigh", "medium", "low"), default="xhigh")
     parser.add_argument("--completion-retries", type=int, default=0)
     parser.add_argument("--compaction-headroom-tokens", type=int)
+    parser.add_argument("--no-auto-compaction", action="store_true")
     parser.add_argument("--context-window", default=65536, type=int)
     parser.add_argument("--max-tokens", default=32768, type=int)
     parser.add_argument("--reasoning-effort", choices=("off", "low", "high", "max"), default="high")
