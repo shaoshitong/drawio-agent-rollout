@@ -157,11 +157,12 @@ class Rewriter:
         if "".join(part["text"] for part in parts) != source:
             raise ValueError("Reasoning segmentation is not lossless")
         compact, audits = [], []
-        for part in parts:
+        reused = message_key(original) in prior
+        for part in [] if reused else parts:
             text, audit = self.fragment(part, context, "".join(compact), reader, folder, row["sample_id"])
             compact.append(text + "\n" if audit["outcome"] == "compressed" else text)
             audits.append(audit)
-        reasoning = "".join(compact)
+        reasoning = prior[message_key(original)] if reused else "".join(compact)
         changes = [{"index": index, "source_sha256": digest(before.get("reasoning_content") or ""),
                     "reasoning_content": after["reasoning_content"]}
                    for index, (before, after) in enumerate(zip(source_request["messages"], history))
@@ -171,6 +172,7 @@ class Rewriter:
                    "current_reasoning": reasoning}
         proof = {"sample_id": row["sample_id"], "original_reasoning_tokens": self.count(source),
                  "rewritten_reasoning_tokens": self.count(reasoning), "fragments": len(parts),
+                 "reused_prior_reasoning": reused,
                  "compressed_fragments": sum(a["outcome"] == "compressed" for a in audits),
                  "fallback_fragments": sum(a["outcome"].startswith("source_retained") for a in audits),
                  "answer_fields_sha256": digest(answer_fields(original)), "answer_fields_unchanged": True,
