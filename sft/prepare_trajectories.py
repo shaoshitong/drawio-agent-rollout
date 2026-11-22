@@ -15,8 +15,10 @@ from drawio.utils.xml_models import models
 
 if __package__:
     from .data import materialize, open_store, token_sha256
+    from .history import HISTORY_POLICY
 else:
     from data import materialize, open_store, token_sha256
+    from history import HISTORY_POLICY
 
 
 def read_jsonl(path):
@@ -204,6 +206,7 @@ def curriculum(args):
                     "final_components", "final_vertices", "final_edges", "final_image_cells",
                     "archived_final_render_verified", "fidelity_verified", "data_part")},
                 "episode_order": index, "decision_order": order, "supervision_eligible": True,
+                "history_policy": HISTORY_POLICY,
                 "chat_template_kwargs": {"enable_thinking": not args.no_thinking},
             })
     return selected, rejections, {"source_episodes": len(records), "source_unique_decisions": len(decisions),

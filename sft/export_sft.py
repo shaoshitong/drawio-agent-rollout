@@ -9,9 +9,11 @@ import json
 from pathlib import Path
 
 if __package__:
+    from .history import strip_history_thinking
     from .store import Store
     from .interruption import annotation
 else:
+    from history import strip_history_thinking
     from store import Store
     from interruption import annotation
 
@@ -66,6 +68,7 @@ def materialize(store, row, decode_images=True, rewrite=None):
 
         request, response = apply_rewrite(request, response, row, rewrite)
     prompt, images = normalize(request["messages"], decode_images)
+    prompt = strip_history_thinking(prompt)
     completion, response_images = normalize([response["choices"][0]["message"]], decode_images)
     if response_images:
         raise ValueError("Unexpected teacher-generated image output")

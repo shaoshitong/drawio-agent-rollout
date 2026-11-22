@@ -7,9 +7,11 @@ from pathlib import Path
 import sqlite3
 
 if __package__:
+    from .history import HISTORY_POLICY
     from .export_sft import materialize as teacher_example
     from .store import Store
 else:
+    from history import HISTORY_POLICY
     from export_sft import materialize as teacher_example
     from store import Store
 
@@ -85,6 +87,7 @@ def materialize(row, base_dir, store=None, rewrite_store=None):
         "images": example["images"],
         "sample_id": row["sample_id"],
         "kind": "teacher_decision",
+        "history_policy": HISTORY_POLICY,
         "chat_template_kwargs": {**row.get("chat_template_kwargs", {}), "tools": tools},
     }
 

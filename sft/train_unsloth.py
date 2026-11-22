@@ -97,6 +97,8 @@ def audit_batch(model, processor, examples, batch, max_length):
 def audit_target(model, processor, example, ids, labels, image_tokens, max_length):
     import torch
 
+    if any(message.get("reasoning_content") for message in example["prompt"] if message["role"] == "assistant"):
+        raise ValueError("Historical thinking reached the training batch")
     prompt, completion = render_completion(processor, example)
     target = processor(
         text=[completion], add_special_tokens=False, return_tensors="pt"
@@ -127,6 +129,7 @@ def audit_target(model, processor, example, ids, labels, image_tokens, max_lengt
         "prompt_tokens": start, "target_tokens": len(target), "image_tokens": image_tokens,
         "images": len(example["images"]), "has_reasoning": bool(reasoning),
         "tool_calls": sum(len(m.get("tool_calls") or []) for m in example["completion"]),
+        "history_thinking_messages": 0,
         "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "prompt_token_sha256": prompt_token_sha256,
         "completion_sha256": hashlib.sha256(completion.encode()).hexdigest(),

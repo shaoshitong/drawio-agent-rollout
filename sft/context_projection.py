@@ -6,6 +6,7 @@ import json
 import re
 
 from .audit_context_budget import result_anchors, tool_result
+from .history import strip_history_thinking
 
 
 QUOTES = re.compile(r'`([^`\n]{24,512})`|"([^"\n]{24,512})"|“([^”\n]{24,512})”')
@@ -16,24 +17,6 @@ THINKING_PROTOCOL = "history-v2"
 def message_text(message):
     content = message.get("content") or ""
     return content if isinstance(content, str) else "".join(part.get("text", "") for part in content)
-
-
-def strip_history_thinking(messages):
-    """Remove explicit historical reasoning; preserve ambiguous/literal content."""
-    candidate = deepcopy(messages)
-    for message in candidate:
-        if message["role"] != "assistant":
-            continue
-        if isinstance(message.get("reasoning_content"), str):
-            # Keep an explicit empty field so the template does not reinterpret
-            # literal </think> text in visible content as a reasoning boundary.
-            message["reasoning_content"] = ""
-            continue
-        content = message.get("content")
-        if isinstance(content, str) and content.lstrip().startswith("<think>") and "</think>" in content:
-            message["content"] = content.split("</think>", 1)[1].lstrip("\n")
-            message["reasoning_content"] = ""
-    return candidate
 
 
 def dependencies(messages, groups):
