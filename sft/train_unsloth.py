@@ -425,6 +425,7 @@ def train(config, model, processor, examples, collator, output):
                                     "average_tokens_across_devices": args.average_tokens_across_devices,
                                     "gradient_accumulation_steps": args.gradient_accumulation_steps,
                                     "world_size": args.world_size,
+                                    "activation_offloading": args.activation_offloading,
                                 })
                 write_json(output / "adapter-update.json", evidence)
 
@@ -473,6 +474,7 @@ def train(config, model, processor, examples, collator, output):
         dataloader_drop_last=False, logging_steps=1, logging_nan_inf_filter=False, report_to="none",
         save_strategy="steps", save_steps=config["save_steps"], save_total_limit=2,
         save_only_model=False, gradient_checkpointing=True, ddp_find_unused_parameters=False,
+        activation_offloading=config.get("activation_offloading", False),
     )
     trainer_class = CurriculumTrainer
     if config.get("full_finetuning"):
@@ -483,6 +485,8 @@ def train(config, model, processor, examples, collator, output):
         model=model, processing_class=processor, train_dataset=dataset,
         data_collator=collator, args=args, callbacks=[UpdateEvidence()],
     )
+    if config.get("activation_offloading"):
+        trainer.maybe_activation_offload_context.use_streams = False
     if config.get("full_finetuning"):
         # The fused Qwen forward consumes this count, but the bare HF model
         # declares False. Set the Trainer flag after all Unsloth init patches.
@@ -575,6 +579,8 @@ def main():
                                        "phase_decay_updates", "phase_min_lr_ratio", "vision_lr_ratio")}
         identity["world_size"] = int(os.environ.get("WORLD_SIZE", "1"))
         identity["manifest_sha256"] = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
+        if config.get("activation_offloading"):
+            identity["activation_offloading"] = True
         if config.get("sampling_pool"):
             identity["sampling_pool_sha256"] = hashlib.sha256(Path(config["sampling_pool"]).read_bytes()).hexdigest()
         if config.get("resume_from_checkpoint"):
