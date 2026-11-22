@@ -14,7 +14,7 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from .causal_cot import (POLICY, answer_fields, digest, evidence, fragments,
+from .causal_cot import (POLICY, answer_fields, copy_edits, digest, evidence, fragments,
                          mechanical_feedback, message_key, payload, rewrite_history)
 from .check_prefix_chains import Reader
 from .data import load_manifest
@@ -97,7 +97,7 @@ class Rewriter:
             record.update(response_ref=self.store.put(result), usage=result.get("usage"))
             choice = result["choices"][0]
             content = choice["message"].get("content")
-            if choice["finish_reason"] != "stop" or not content or "<think>" in content or "</think>" in content:
+            if choice["finish_reason"] != "stop" or not content or content.lstrip().startswith(("<think>", "</think>")):
                 raise IncompleteRewrite("Incomplete local rewrite/judge response")
             return choice["message"]["content"]
         except (HTTPError, URLError, TimeoutError, ValueError) as error:
@@ -120,17 +120,19 @@ class Rewriter:
             return source, {**scope, "outcome": "already_short", "attempts": []}
         if not part["boundary_safe"]:
             return source, {**scope, "outcome": "source_retained_at_identifier_boundary", "attempts": []}
-        feedback, attempts = None, []
-        known = previous + "\n" + context[0]["text"]
+        feedback, proposal, attempts = None, None, []
+        known = previous
         for attempt in range(2):
-            body = payload(context, previous, source, feedback=feedback,
+            body = payload(context, previous, source, feedback=feedback, candidate=proposal,
                            target_tokens=max(48, round(self.count(source) * 0.35)), seed=42 + attempt)
             try:
-                candidate = self.request(body, reader, folder, {**scope, "operation": "compress", "attempt": attempt})
+                generated = self.request(body, reader, folder, {**scope, "operation": "compress", "attempt": attempt})
+                candidate, edit_proof = copy_edits(source, json.loads(generated)["edits"])
+                proposal = candidate
                 checks = mechanical_feedback(source, candidate, known)
                 judge_body = payload(context, previous, source, operation="judge", candidate=candidate)
                 judge_text = self.request(judge_body, reader, folder, {**scope, "operation": "judge", "attempt": attempt})
-            except IncompleteRewrite as error:
+            except (IncompleteRewrite, json.JSONDecodeError, KeyError) as error:
                 feedback = str(error)
                 attempts.append({"passed": False, "error": feedback})
                 continue
@@ -140,7 +142,7 @@ class Rewriter:
                 faithful, judge = False, {"invalid_judge_json": judge_text}
             shorter = self.count(candidate) < self.count(source)
             passed = faithful and not any(checks.values()) and shorter
-            attempts.append({"candidate": candidate, "checks": checks, "judge": judge,
+            attempts.append({"candidate": candidate, "edit_proof": edit_proof, "checks": checks, "judge": judge,
                              "shorter": shorter, "passed": passed})
             if passed:
                 return candidate, {**scope, "outcome": "compressed", "attempts": attempts}
