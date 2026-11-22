@@ -10,13 +10,22 @@ from .audit_context_budget import tool_result
 from .causal_cot import digest, fragments
 
 
-POLICY = "arrival-observation-v1"
+POLICY = "arrival-observation-v2"
 PROTECTED = re.compile(
     r"<mxfile|<mxGraphModel|<mxCell|```|Traceback|\b(?:ERROR|Exception)\b|"
     r"official_drawio|png_sha256|\"exit_code\"\s*:\s*[1-9]|Process exited with code [1-9]|"
     r"^\s*(?:from \S+ import|import \S+|def |class |for .+ in |while |return |raise )|"
     r"^\s*[A-Za-z_]\w*(?:\[[^\n]+\])?\s*=", re.M,
 )
+
+
+def prose_observation(text):
+    body = text.removeprefix("<tool_response>").removesuffix("</tool_response>").strip()
+    if not body or body.startswith(("{", "[")):
+        return False
+    letters = sum(char.isalpha() for char in body)
+    digits = sum(char.isdigit() for char in body)
+    return letters / len(body) >= 0.55 and digits / len(body) <= 0.12
 
 
 def text_parts(message):
@@ -53,7 +62,7 @@ class ObservationContext:
         arguments = str(function.get("arguments", ""))
         if name == "skill" or re.search(r"review[12]\.json|\.drawio|\.xml|\.py\b|SKILL", arguments):
             return text
-        if PROTECTED.search(text) or self.rewriter.count(text) <= 768:
+        if not prose_observation(text) or PROTECTED.search(text) or self.rewriter.count(text) <= 768:
             return text
         key = digest({"policy": POLICY, "editor": self.rewriter.args.source_commit,
                       "text": text, "function": function})

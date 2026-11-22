@@ -6,12 +6,12 @@ import json
 from pathlib import Path
 import time
 
-from .audit_context_budget import template_messages
+from .audit_context_budget import template_messages, tool_result
 from .causal_cot import anchors, answer_fields, apply_rewrite, digest, numbers, protected_values
 from .check_prefix_chains import Reader
 from .data import load_manifest, open_store
 from .history import HISTORY_POLICY, strip_history_thinking
-from .observation_context import apply_observations
+from .observation_context import apply_observations, text_parts
 
 
 def visible_text(message):
@@ -69,7 +69,9 @@ def audit_row(row, reader, store, processor):
             "observation_summaries": len(overlay.get("observations", [])), "native_answer_exact": True}
 
 
-def audit_wire(root, store):
+def audit_wire(root, store, rows, readers):
+    by_id = {row["sample_id"]: row for row in rows}
+    by_request = {row["request_ref"]: row for row in rows}
     counts = Counter()
     paths = list((root / "episodes").glob("*/requests.jsonl"))
     paths += list((root / "context-cache").glob("requests.jsonl"))
@@ -86,6 +88,20 @@ def audit_wire(root, store):
                 raise ValueError("Required anchors are not derived solely from the current source")
             if digest(data["source_fragment"]) != record["source_sha256"] or digest(data["earlier_compact"]) != record["previous_sha256"]:
                 raise ValueError("Actual editor source/previous fragment differs from its provenance")
+            row = by_id.get(record["sample_id"]) or by_request[record["archived_request_ref"]]
+            reader = readers[row["snapshot_root"]]
+            if record["sample_id"].startswith("observation:"):
+                request = reader.value(record["archived_request_ref"])
+                sources = [text for message in request["messages"] if tool_result(message)
+                           for _, text in text_parts(message)]
+                sources = [text[len("<tool_response>"):-len("</tool_response>")]
+                           if text.startswith("<tool_response>") and text.endswith("</tool_response>") else text
+                           for text in sources]
+            else:
+                response = reader.value(row["response_ref"])
+                sources = [response["choices"][0]["message"].get("reasoning_content") or ""]
+            if not any(source[record["source_start"]:record["source_end"]] == data["source_fragment"] for source in sources):
+                raise ValueError("Editor fragment is not the declared original reasoning/observation span")
             if digest(body) != record["request_sha256"]:
                 raise ValueError("Actual request body digest differs")
             counts["requests"] += 1
@@ -102,7 +118,8 @@ def main():
     args = parser.parse_args()
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
     readers, stores, records = {}, {}, []
-    for row in load_manifest(args.manifest):
+    rows = load_manifest(args.manifest)
+    for row in rows:
         source, rewrite = row["snapshot_root"], row["reasoning_rewrite"]["root"]
         if source not in readers:
             readers[source] = Reader(source)
@@ -120,8 +137,10 @@ def main():
                "answer_overlap_values": overlap, "omitted_answer_overlap_values": omitted,
                "omitted_overlap_fraction": omitted / overlap if overlap else 0,
                "overlap_scope": "Unique numeric overlap per decision, not proof of action dependencies; corpus-level reporting only",
-               "nonreasoning_fields_and_native_answers_exact": True,
-               "wire": {root: audit_wire(Path(root).parent, store) for root, store in stores.items()},
+               "current_answers_exact_and_history_changes_audited": True,
+               "wire": {root: audit_wire(Path(root).parent, store,
+                   [row for row in rows if row["reasoning_rewrite"]["root"] == root], readers)
+                   for root, store in stores.items()},
                "model_quality_acceptance": False, "answer_feedback_used_for_compression": False}
     args.output.write_text(json.dumps({"summary": summary, "decisions": records}, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(summary))
