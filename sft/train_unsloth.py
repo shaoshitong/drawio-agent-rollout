@@ -393,6 +393,13 @@ def train(config, model, processor, examples, collator, output):
     order, plan = curriculum_order(examples, config, int(os.environ.get("WORLD_SIZE", "1")))
     if config.get("gate_indices"):
         order = config["gate_indices"]
+        plan["execution_subset"] = {
+            "decisions": len(order),
+            "source_indices_sha256": hashlib.sha256(json.dumps(order).encode()).hexdigest(),
+            "difficulty_stages": dict(Counter(
+                bisect_left(plan["difficulty_boundaries"], examples.dataset.rows[index]["final_components"])
+                for index in order)),
+        }
     if config.get("resume_from_checkpoint"):
         previous = json.loads((Path(config["resume_from_checkpoint"]).parent / "curriculum-order.json").read_text())
         if previous["source_indices_sha256"] != plan["source_indices_sha256"]:
@@ -588,6 +595,8 @@ def main():
             identity["activation_offloading"] = True
         if config.get("sampling_pool"):
             identity["sampling_pool_sha256"] = hashlib.sha256(Path(config["sampling_pool"]).read_bytes()).hexdigest()
+        if config.get("gate_indices"):
+            identity["execution_subset_sha256"] = hashlib.sha256(json.dumps(config["gate_indices"]).encode()).hexdigest()
         if config.get("resume_from_checkpoint"):
             checkpoint = Path(config["resume_from_checkpoint"])
             bridge = config.get("full_finetuning") and checkpoint.resolve() == Path(config["bridge_checkpoint"]).resolve()
