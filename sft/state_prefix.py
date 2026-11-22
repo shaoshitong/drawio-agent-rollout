@@ -14,7 +14,7 @@ from .audit_context_budget import template_messages, tool_result
 from .history import strip_history_thinking
 
 
-POLICY = "own-state-prefix-v1"
+POLICY = "own-state-prefix-v2"
 INPUT_BUDGET = 24576
 CONTEXT_BUDGET = 32768
 CODE_SUFFIXES = {".py", ".js", ".sh", ".xml", ".drawio", ".svg"}
@@ -151,10 +151,18 @@ def build_state_prefix(messages, files, read_file, stage, counter, summaries=())
     state = [f"Own workspace before the current decision, generator round {stage}."]
     state.append("The latest available render can predate edits; it is not a reference answer.")
     hashes = {}
+    optional = None
+    latest_xml = next((f"round{number}.drawio" for number in range(stage, 0, -1)
+                       if f"round{number}.drawio" in files), None)
     for name in selected:
         raw = read_file(name)
         hashes[name] = sha256(raw).hexdigest()
-        state.append(f"<own_file path={json.dumps(name)} sha256={hashes[name]}>\n{raw.decode()}\n</own_file>")
+        state.append(f"Own file: path={json.dumps(name)} bytes={len(raw)} sha256={hashes[name]}")
+        if name in (".agents/skills/drawio-reconstruction/SKILL.md", "review1.json"):
+            state.append(f"<own_file path={json.dumps(name)}>\n{raw.decode()}\n</own_file>")
+        elif name == latest_xml:
+            optional = f"<own_file path={json.dumps(name)}>\n{raw.decode()}\n</own_file>"
+    state.append("Files remain available in your workspace. Read them with tools when needed; omitted file content is not known.")
     summary = keep_lines(summaries, counter.tokenizer, 2048)
     state.append("Earlier prose observations:\n" + summary)
     content = [{"type": "text", "text": ""}]
@@ -174,8 +182,17 @@ def build_state_prefix(messages, files, read_file, stage, counter, summaries=())
         candidate = systems + task + history + latest + [packet]
         count = counter(candidate)
         if count <= INPUT_BUDGET:
+            injected = False
+            if optional:
+                content[0]["text"] += "\n\n" + optional
+                extended = counter(candidate)
+                if extended <= INPUT_BUDGET:
+                    count, injected = extended, True
+                else:
+                    content[0]["text"] = content[0]["text"][:-len(optional) - 2]
             return resolve_images(candidate, counter.read_blob), {"policy": POLICY, "input_tokens": count, "recent_cycles": keep,
                 "original_cycles": len(cycles), "files_sha256": hashes,
+                "latest_xml_fulltext_injected": injected,
                 "history_thinking_messages": 0, "targets_used_to_build_input": False}
     return None, {"policy": POLICY, "rejection": "protected_state_exceeds_input_budget",
                    "input_tokens": count, "files_sha256": hashes, "targets_used_to_build_input": False}

@@ -161,7 +161,7 @@ class Rewriter:
         selection = self.selection.get(row["sample_id"])
         if selection and not selection["keep"]:
             proof = {"rejection": selection["reason"], "offline_selection_only": True,
-                     "policy": "complete-phase-cap64-v1"}
+                     "policy": self.args.selection_policy}
             return {"row": {**row, "state_rejection": proof},
                     "proof": {"sample_id": row["sample_id"], **proof, "at": time.time()}, "key": None}
         source_request = reader.value(row["request_ref"])
@@ -176,7 +176,18 @@ class Rewriter:
                 return {"row": {**row, "state_rejection": state_proof},
                         "proof": {"sample_id": row["sample_id"], **state_proof, "at": time.time()}, "key": None}
             state = {**state_proof, "snapshot": snapshot, "source_request_ref": row["request_ref"], "messages": messages}
-        original = reader.value(row["response_ref"])["choices"][0]["message"]
+        source_response = reader.value(row["response_ref"])
+        original = source_response["choices"][0]["message"]
+        if state:
+            from .action_visibility import qualify_target
+
+            formatted = {**source_request, "messages": state["messages"]}
+            target_check = qualify_target(self.state.processor, formatted, source_response, state["files_sha256"],
+                lambda name: reader.store.raw(files[name]), state["input_tokens"],
+                mutation=self.selection.get(row["sample_id"], {}).get("mutation", True))
+            if "rejection" in target_check:
+                return {"row": {**row, "state_rejection": target_check},
+                        "proof": {"sample_id": row["sample_id"], **target_check, "at": time.time()}, "key": None}
         history, matches = rewrite_history(source_request["messages"], prior)
         observations = []
         if self.context:
@@ -192,6 +203,14 @@ class Rewriter:
             compact.append(text + "\n" if audit["outcome"] == "compressed" else text)
             audits.append(audit)
         reasoning = prior[message_key(original)] if reused else "".join(compact)
+        if state:
+            compact_response = deepcopy(source_response)
+            compact_response["choices"][0]["message"]["reasoning_content"] = reasoning
+            target_check = qualify_target(self.state.processor, formatted, compact_response, {}, None,
+                state["input_tokens"], mutation=False, include_reasoning=True)
+            if "rejection" in target_check:
+                return {"row": {**row, "state_rejection": target_check},
+                        "proof": {"sample_id": row["sample_id"], **target_check, "at": time.time()}, "key": None}
         changes = [{"index": index, "source_sha256": digest(before.get("reasoning_content") or ""),
                     "reasoning_content": after["reasoning_content"]}
                    for index, (before, after) in enumerate(zip(source_request["messages"], history))
@@ -279,11 +298,12 @@ def main():
     lease.flush()
     rows = select_rows(args.data)
     if args.selection_plan:
-        from .prepare_selection import load_selection
+        from .prepare_selection import POLICY as selection_policy, load_selection
 
         if not args.state_prefix_model:
             parser.error("--selection-plan requires --state-prefix-model")
         args.selection = load_selection(args.selection_plan, rows)
+        args.selection_policy = selection_policy
     if args.sample_decisions:
         rows = random.Random(20261122).sample([row for row in rows if row["split"] == "train"], args.sample_decisions)
         rows.sort(key=lambda row: (row["episode_order"], row["call_id"]))
@@ -322,11 +342,16 @@ def main():
                 print(json.dumps(failure), flush=True)
     if failures:
         raise RuntimeError(f"{len(failures)} episodes incomplete; completed decisions are resumable")
+    results = [json.loads((args.output / "episodes" / row["episode"] / (str(row["call_id"]) + ".json")).read_text())["row"]
+               for row in rows]
+    if args.selection_plan:
+        from .prepare_selection import finalize_rows
+
+        results = finalize_rows(results, args.selection)
     with (args.output / "rewritten.jsonl").open("w") as stream:
-        for row in rows:
-            path = args.output / "episodes" / row["episode"] / (str(row["call_id"]) + ".json")
-            stream.write(json.dumps(json.loads(path.read_text())["row"]) + "\n")
-    atomic(args.output / "completed.json", {**plan, "at": time.time(), "counts": dict(rewriter.counts)})
+        stream.writelines(json.dumps(row) + "\n" for row in results)
+    atomic(args.output / "completed.json", {**plan, "at": time.time(), "counts": dict(rewriter.counts),
+           "retained_after_phase_check": sum(not row.get("state_rejection") for row in results)})
 
 
 if __name__ == "__main__":

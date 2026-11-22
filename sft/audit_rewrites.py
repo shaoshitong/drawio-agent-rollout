@@ -23,10 +23,11 @@ def visible_text(message):
     return "\n".join(parts)
 
 
-def native_answer(processor, request, response, options):
+def native_answer(processor, request, response, options, include_reasoning=False):
     prompt = strip_history_thinking(template_messages(request["messages"]))
     completion = template_messages([response["choices"][0]["message"]])
-    completion[0]["reasoning_content"] = ""
+    if not include_reasoning:
+        completion[0]["reasoning_content"] = ""
     prefix = processor.apply_chat_template(prompt, add_generation_prompt=True, **options)
     full = processor.apply_chat_template(prompt + completion, add_generation_prompt=False, **options)
     if not full.startswith(prefix):
