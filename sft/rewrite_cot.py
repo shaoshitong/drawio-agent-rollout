@@ -2,6 +2,7 @@
 
 import argparse
 import fcntl
+from functools import lru_cache
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
@@ -73,6 +74,7 @@ class Rewriter:
         self.counts = defaultdict(int)
         self.context = ObservationContext(self) if args.rewrite_observations else None
 
+    @lru_cache(maxsize=8192)
     def count(self, text):
         return len(self.tokenizer(text, add_special_tokens=False)["input_ids"])
 

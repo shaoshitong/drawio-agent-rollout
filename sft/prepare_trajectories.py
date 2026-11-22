@@ -99,14 +99,14 @@ def paper_split(records, seed, fraction):
 
 
 def initialize_worker(processor_path, max_tokens, thinking):
-    global PROCESSOR, MAX_TOKENS, THINKING, STORES
+    global PROCESSOR, MAX_TOKENS, THINKING, STORES, REWRITES
     import torch
     from transformers import AutoProcessor
 
     torch.set_num_threads(1)
     PROCESSOR = AutoProcessor.from_pretrained(processor_path, local_files_only=True)
     MAX_TOKENS, THINKING = max_tokens, thinking
-    STORES = {}
+    STORES, REWRITES = {}, {}
 
 
 def measure(row):
@@ -114,7 +114,10 @@ def measure(row):
         root = row["snapshot_root"]
         if root not in STORES:
             STORES[root] = open_store(root)
-        sample = materialize(row, Path("/"), STORES[root])
+        rewrite = row.get("reasoning_rewrite")
+        if rewrite and rewrite["root"] not in REWRITES:
+            REWRITES[rewrite["root"]] = open_store(rewrite["root"])
+        sample = materialize(row, Path("/"), STORES[root], REWRITES[rewrite["root"]] if rewrite else None)
         message = sample["completion"][0]
         reasoning = bool((message.get("reasoning_content") or "").strip())
         kwargs = {**sample["chat_template_kwargs"], "enable_thinking": THINKING, "tokenize": False}
@@ -202,6 +205,7 @@ def curriculum(args):
                 "schema": "drawio-sft/1", "kind": "teacher_decision",
                 **{key: row[key] for key in ("sample_id", "episode", "call_id", "stage",
                                             "request_ref", "response_ref")},
+                **{key: row[key] for key in ("reasoning_rewrite",) if key in row},
                 **{key: episode[key] for key in ("snapshot_root", "paper_group", "split",
                     "final_components", "final_vertices", "final_edges", "final_image_cells",
                     "archived_final_render_verified", "fidelity_verified", "data_part")},
