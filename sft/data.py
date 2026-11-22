@@ -4,6 +4,7 @@ from collections import OrderedDict
 from hashlib import sha256
 import json
 from pathlib import Path
+import sqlite3
 
 if __package__:
     from .export_sft import materialize as teacher_example
@@ -30,9 +31,21 @@ class ReadOnlyStore(Store):
         root = Path(root)
         self.root = root / "archive" if (root / "archive").is_dir() else root
         self.objects = self.root / "objects"
-        if not self.objects.is_dir():
+        packed = self.root / "objects.sqlite3"
+        self.db = None
+        if packed.is_file():
+            self.db = sqlite3.connect(packed.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
+        if self.db is None and not self.objects.is_dir():
             raise FileNotFoundError(self.objects)
         self.cache, self.cache_bytes, self.used_bytes = OrderedDict(), cache_bytes, 0
+
+    def read_blob(self, reference):
+        if self.db is None:
+            return super().read_blob(reference)
+        row = self.db.execute("select data from objects where id=?", (reference,)).fetchone()
+        if row is None:
+            raise FileNotFoundError(reference)
+        return row[0]
 
     def raw(self, reference):
         if reference in self.cache:

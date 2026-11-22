@@ -57,9 +57,12 @@ class Store:
                 )
         return digest
 
-    def raw(self, digest):
+    def read_blob(self, digest):
         path = self.objects / digest[:2] / (digest[2:] + ".bin")
-        raw = path.read_bytes() if path.is_file() else gzip.decompress(path.with_suffix(".gz").read_bytes())
+        return path.read_bytes() if path.is_file() else gzip.decompress(path.with_suffix(".gz").read_bytes())
+
+    def raw(self, digest):
+        raw = self.read_blob(digest)
         if sha256(raw).hexdigest() != digest:
             raise ValueError("Corrupt content-addressed object: " + digest)
         return raw
