@@ -99,7 +99,7 @@ def audit_wire(root, store, rows, readers):
             reader = readers[row["snapshot_root"]]
             if record["sample_id"].startswith("observation:"):
                 request = reader.value(record["archived_request_ref"])
-                sources = [text for message in request["messages"] if tool_result(message) or message["role"] == "assistant"
+                sources = [text for message in request["messages"] if message["role"] in ("assistant", "tool", "user")
                            for _, text in text_parts(message)]
                 sources = [text[len("<tool_response>"):-len("</tool_response>")]
                            if text.startswith("<tool_response>") and text.endswith("</tool_response>") else text

@@ -72,6 +72,7 @@ class Rewriter:
         self.lock = threading.Lock()
         self.started = time.time()
         self.counts = defaultdict(int)
+        self.selection = getattr(args, "selection", {})
         self.context = ObservationContext(self) if args.rewrite_observations else None
         self.state = None
         if getattr(args, "state_prefix_model", None):
@@ -157,6 +158,12 @@ class Rewriter:
         return source, {**scope, "outcome": "source_retained_after_failed_verification", "attempts": attempts}
 
     def decision(self, row, reader, prior, folder):
+        selection = self.selection.get(row["sample_id"])
+        if selection and not selection["keep"]:
+            proof = {"rejection": selection["reason"], "offline_selection_only": True,
+                     "policy": "complete-phase-cap64-v1"}
+            return {"row": {**row, "state_rejection": proof},
+                    "proof": {"sample_id": row["sample_id"], **proof, "at": time.time()}, "key": None}
         source_request = reader.value(row["request_ref"])
         state = None
         if self.state:
@@ -233,7 +240,8 @@ class Rewriter:
             with self.lock:
                 proof = result["proof"]
                 self.counts["decisions"] += 1
-                self.counts["state_rejected" if key is None else "accepted"] += 1
+                outcome = "selection_excluded" if proof.get("offline_selection_only") else "state_rejected"
+                self.counts[outcome if key is None else "accepted"] += 1
                 for name in ("original_reasoning_tokens", "rewritten_reasoning_tokens", "compressed_fragments",
                              "fallback_fragments", "unmatched_history_messages"):
                     self.counts[name] += proof.get(name, 0)
@@ -257,6 +265,8 @@ def main():
     context_group = parser.add_mutually_exclusive_group()
     context_group.add_argument("--rewrite-observations", action="store_true")
     context_group.add_argument("--state-prefix-model", type=Path)
+    parser.add_argument("--selection-plan", type=Path,
+                        help="Full-corpus offline qualification and sampling receipts")
     parser.add_argument("--sample-decisions", type=int, default=0,
                         help="Frozen random train-only calibration; zero processes the full corpus")
     args = parser.parse_args()
@@ -268,6 +278,12 @@ def main():
     lease.write(str(os.getpid()) + "\n")
     lease.flush()
     rows = select_rows(args.data)
+    if args.selection_plan:
+        from .prepare_selection import load_selection
+
+        if not args.state_prefix_model:
+            parser.error("--selection-plan requires --state-prefix-model")
+        args.selection = load_selection(args.selection_plan, rows)
     if args.sample_decisions:
         rows = random.Random(20261122).sample([row for row in rows if row["split"] == "train"], args.sample_decisions)
         rows.sort(key=lambda row: (row["episode_order"], row["call_id"]))
@@ -278,6 +294,8 @@ def main():
     plan.update(calibration_only=bool(args.sample_decisions), selection_seed=20261122)
     plan["context_policy"] = CONTEXT_POLICY if args.rewrite_observations else None
     plan["state_prefix_model"] = str(args.state_prefix_model) if args.state_prefix_model else None
+    if args.selection_plan:
+        plan["selection_plan_sha256"] = digest(json.loads(args.selection_plan.read_text()))
     plan_path = args.output / "plan.json"
     if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
         raise ValueError("Existing output belongs to another source or rewrite policy")
