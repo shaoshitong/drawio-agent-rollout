@@ -245,6 +245,15 @@ def setup(config):
             use_gradient_checkpointing="unsloth", random_state=config["seed"],
         )
     FastVisionModel.for_training(model)
+    if config.get("mlp_tile_rows"):
+        from unsloth import tile_mlp
+
+        tiled = tile_mlp(model, rows=config["mlp_tile_rows"], modules="*language_model.layers.*.mlp")
+        if not tiled.tiled:
+            raise RuntimeError("No language MLPs were tiled")
+        write_json(Path(config["output"]) / "tiled-mlp.json", {
+            "rows": config["mlp_tile_rows"], "tiled": tiled.tiled, "skipped": tiled.skipped,
+        })
     use_linear_patch_embedding(model)
     examples = Examples(config["manifest"], config["split"], config["enable_thinking"],
                         config.get("max_train_samples"), config.get("store_path"))
@@ -597,6 +606,8 @@ def main():
             identity["sampling_pool_sha256"] = hashlib.sha256(Path(config["sampling_pool"]).read_bytes()).hexdigest()
         if config.get("gate_indices"):
             identity["execution_subset_sha256"] = hashlib.sha256(json.dumps(config["gate_indices"]).encode()).hexdigest()
+        if config.get("mlp_tile_rows"):
+            identity["mlp_tile_rows"] = config["mlp_tile_rows"]
         if config.get("resume_from_checkpoint"):
             checkpoint = Path(config["resume_from_checkpoint"])
             bridge = config.get("full_finetuning") and checkpoint.resolve() == Path(config["bridge_checkpoint"]).resolve()
