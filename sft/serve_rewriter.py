@@ -36,7 +36,8 @@ def main():
              "model": "Qwen/Qwen3.8-27B", "physical_gpus": [4, 5, 6, 7], "tensor_parallel": 4,
              "context_tokens": args.context_tokens, "port": args.port, "training": False,
              "request_concurrency": args.concurrency, "inventory_before": selected}
-    state.update(mamba_cache_size=max(16, args.concurrency * 2),
+    # SGLang reserves three Mamba state slots per live request with prefix caching.
+    state.update(mamba_cache_size=max(16, args.concurrency * 3),
                  batch_token_capacity=max(args.context_tokens, args.concurrency * 16384))
     status = args.output / "status.json"
     status.write_text(json.dumps(state, indent=2) + "\n")
