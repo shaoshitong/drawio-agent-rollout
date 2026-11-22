@@ -7,7 +7,7 @@ from pathlib import Path
 import time
 
 from .audit_context_budget import template_messages
-from .causal_cot import anchors, answer_fields, apply_rewrite, digest, numbers
+from .causal_cot import anchors, answer_fields, apply_rewrite, digest, numbers, protected_values
 from .check_prefix_chains import Reader
 from .data import load_manifest, open_store
 from .history import HISTORY_POLICY, strip_history_thinking
@@ -75,8 +75,10 @@ def audit_wire(root, store):
             data = json.loads(body["messages"][1]["content"])
             if len(body["messages"]) != 2 or [m["role"] for m in body["messages"]] != ["system", "user"]:
                 raise ValueError("Editor input contains a conversation history")
-            if set(data) - {"source_fragment", "earlier_compact", "candidate", "previous_proposal", "verification_feedback"}:
+            if set(data) - {"source_fragment", "earlier_compact", "candidate", "previous_proposal", "verification_feedback", "required_source_anchors"}:
                 raise ValueError("Unexpected editor evidence field")
+            if "required_source_anchors" in data and data["required_source_anchors"] != sorted(protected_values(data["source_fragment"])):
+                raise ValueError("Required anchors are not derived solely from the current source")
             if digest(data["source_fragment"]) != record["source_sha256"] or digest(data["earlier_compact"]) != record["previous_sha256"]:
                 raise ValueError("Actual editor source/previous fragment differs from its provenance")
             if digest(body) != record["request_sha256"]:
