@@ -10,11 +10,30 @@ from .audit_context_budget import result_anchors, tool_result
 
 QUOTES = re.compile(r'`([^`\n]{24,512})`|"([^"\n]{24,512})"|“([^”\n]{24,512})”')
 PROTOCOL = "protected-history-v1"
+THINKING_PROTOCOL = "history-v2"
 
 
 def message_text(message):
     content = message.get("content") or ""
     return content if isinstance(content, str) else "".join(part.get("text", "") for part in content)
+
+
+def strip_history_thinking(messages):
+    """Remove explicit historical reasoning; preserve ambiguous/literal content."""
+    candidate = deepcopy(messages)
+    for message in candidate:
+        if message["role"] != "assistant":
+            continue
+        if isinstance(message.get("reasoning_content"), str):
+            # Keep an explicit empty field so the template does not reinterpret
+            # literal </think> text in visible content as a reasoning boundary.
+            message["reasoning_content"] = ""
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.lstrip().startswith("<think>") and "</think>" in content:
+            message["content"] = content.split("</think>", 1)[1].lstrip("\n")
+            message["reasoning_content"] = ""
+    return candidate
 
 
 def dependencies(messages, groups):
@@ -92,21 +111,36 @@ def project_history(messages, keep_results):
 
 
 def select_history(messages, prompt_tokens, *, context=262144, reserve=49152, margin=256,
-                   max_new_tokens=131072):
+                   max_new_tokens=131072, strip_thinking=False):
     """Budget using only input tokens; the callback includes native image expansion."""
     original = prompt_tokens(messages)
-    options = {"protocol": PROTOCOL, "original_prompt_tokens": original, "reserve": reserve,
+    options = {"protocol": THINKING_PROTOCOL if strip_thinking else PROTOCOL,
+               "original_prompt_tokens": original, "reserve": reserve,
                "margin": margin, "context": context, "requested_max_new_tokens": max_new_tokens}
     if original + reserve + margin <= context:
-        return messages, {**options, "triggered": False, "fits": True, "prompt_tokens": original,
+        return messages, {**options, "stage": 0, "history_thinking_removed": False,
+                          "triggered": False, "fits": True, "prompt_tokens": original,
                           "max_new_tokens": min(max_new_tokens, context - original - margin)}
     attempts = []
-    for keep in (16, 8, 4, 0):
-        candidate, details = project_history(messages, keep)
+    if strip_thinking:
+        candidate = strip_history_thinking(messages)
         count = prompt_tokens(candidate)
-        attempts.append({"keep_results": keep, "prompt_tokens": count})
+        attempts.append({"stage": 1, "keep_results": "all", "prompt_tokens": count})
         if count + reserve + margin <= context:
-            return candidate, {**options, **details, "triggered": True, "fits": True,
+            return candidate, {**options, "stage": 1, "history_thinking_removed": True,
+                               "triggered": True, "fits": True, "keep_results": "all",
+                               "prompt_tokens": count, "attempts": attempts,
+                               "max_new_tokens": min(max_new_tokens, context - count - margin)}
+    for keep in (16, 8, 4, 0):
+        # All anchors are computed from the original input, including old thoughts.
+        candidate, details = project_history(messages, keep)
+        if strip_thinking:
+            candidate = strip_history_thinking(candidate)
+        count = prompt_tokens(candidate)
+        attempts.append({"stage": 2, "keep_results": keep, "prompt_tokens": count})
+        if count + reserve + margin <= context:
+            return candidate, {**options, **details, "stage": 2, "history_thinking_removed": strip_thinking,
+                               "triggered": True, "fits": True,
                                "prompt_tokens": count, "attempts": attempts,
                                "max_new_tokens": min(max_new_tokens, context - count - margin)}
     return None, {**options, "triggered": True, "fits": False, "attempts": attempts,

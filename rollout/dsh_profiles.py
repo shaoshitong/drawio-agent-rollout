@@ -59,6 +59,7 @@ def build_patch(
     qwen38_effort: str = "xhigh",
     stream_idle_timeout_ms: int | None = None,
     compaction_headroom_tokens: int | None = None,
+    auto_compaction: bool | None = None,
 ) -> list[dict]:
     """Use with an empty DSH_HOME, never an account or gold-MCP profile.
 
@@ -106,13 +107,13 @@ def build_patch(
     if stream_idle_timeout_ms is not None:
         route["streamIdleTimeoutMs"] = stream_idle_timeout_ms
     patch = [{"id": name, "disabled": True} for name in DISABLED]
+    compaction = {}
     if compaction_headroom_tokens is not None:
-        patch.append(
-            {
-                "id": "compaction-basic",
-                "config": {"headroomTokens": compaction_headroom_tokens, "maxTokens": 65536},
-            }
-        )
+        compaction.update(headroomTokens=compaction_headroom_tokens, maxTokens=65536)
+    if auto_compaction is not None:
+        compaction["auto"] = auto_compaction
+    if compaction:
+        patch.append({"id": "compaction-basic", "config": compaction})
     if role == "reviewer":
         patch.extend({"id": name, "disabled": True} for name in ("tool-todo", "plan-mode"))
     patch.extend(
