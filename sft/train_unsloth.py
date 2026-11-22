@@ -13,6 +13,7 @@ import time
 from types import MethodType
 
 from .data import ManifestDataset, token_sha256
+from .full_finetune import is_bridge_checkpoint
 
 
 def write_json(path, value):
@@ -634,7 +635,7 @@ def main():
             identity["compile_enabled"] = True
         if config.get("resume_from_checkpoint"):
             checkpoint = Path(config["resume_from_checkpoint"])
-            bridge = config.get("full_finetuning") and checkpoint.resolve() == Path(config["bridge_checkpoint"]).resolve()
+            bridge = config.get("full_finetuning") and is_bridge_checkpoint(config, checkpoint)
             previous = json.loads((checkpoint.parent / "training-input.json").read_text())
             immutable = ("split", "max_seq_length", "batch_size", "gradient_accumulation_steps", "difficulty_stages",
                          "sampler_policy", "seed", "world_size", "manifest_sha256", "num_train_epochs", "max_steps")

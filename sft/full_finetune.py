@@ -22,11 +22,16 @@ def lr_factor(update, total, warmup, decay, minimum):
     return max(minimum, 1 - (1 - minimum) * (update - start) / decay)
 
 
+def is_bridge_checkpoint(config, checkpoint):
+    bridge = config.get("bridge_checkpoint")
+    return bool(checkpoint and bridge and Path(checkpoint).resolve() == Path(bridge).resolve())
+
+
 class FullFinetuneTrainer:
     """Mixin: only the explicit LoRA-to-full bridge skips optimizer/model restore."""
 
     def _is_bridge(self, checkpoint):
-        return checkpoint and Path(checkpoint).resolve() == Path(self.full_config["bridge_checkpoint"]).resolve()
+        return is_bridge_checkpoint(self.full_config, checkpoint)
 
     def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
         if not self._is_bridge(resume_from_checkpoint):
@@ -129,7 +134,9 @@ def make_full_callback(trainer, config, output):
 
         def on_step_end(self, args, state, control, **kwargs):
             update = state.global_step - config["phase_start_step"]
-            milestones = {231, 462, 693, state.max_steps}
+            milestones = {state.max_steps}
+            if config.get("bridge_checkpoint"):
+                milestones.update((231, 462, 693))
             control.should_save = update > 0 and (update % config["save_steps"] == 0
                                                        or state.global_step in milestones)
 
