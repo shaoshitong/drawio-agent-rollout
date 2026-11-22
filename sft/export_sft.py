@@ -59,8 +59,12 @@ def normalize(messages, decode_images=True):
     return output, images
 
 
-def materialize(store, row, decode_images=True):
+def materialize(store, row, decode_images=True, rewrite=None):
     request, response = store.get(row["request_ref"]), store.get(row["response_ref"])
+    if rewrite is not None:
+        from .causal_cot import apply_rewrite
+
+        request, response = apply_rewrite(request, response, row, rewrite)
     prompt, images = normalize(request["messages"], decode_images)
     completion, response_images = normalize([response["choices"][0]["message"]], decode_images)
     if response_images:

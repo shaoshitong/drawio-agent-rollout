@@ -1,0 +1,272 @@
+"""Rewrite teacher reasoning chronologically; never expose the current answer."""
+
+import argparse
+import base64
+import fcntl
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import deepcopy
+import json
+import os
+from pathlib import Path
+import threading
+import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from .causal_cot import (POLICY, answer_fields, digest, evidence, fragments,
+                         mechanical_feedback, message_key, payload, rewrite_history)
+from .check_prefix_chains import Reader
+from .data import load_manifest
+from .store import Store
+
+
+class IncompleteRewrite(ValueError):
+    pass
+
+
+def atomic(path, value):
+    temporary = path.with_suffix(".tmp")
+    with temporary.open("w") as stream:
+        json.dump(value, stream, ensure_ascii=False)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+
+
+def select_rows(data):
+    accepted = load_manifest(data / "curriculum.jsonl")
+    metadata = {row["episode"]: {key: row[key] for key in (
+        "snapshot_root", "paper_group", "split", "final_components", "final_vertices",
+        "final_edges", "final_image_cells", "episode_order", "chat_template_kwargs",
+        "archived_final_render_verified", "fidelity_verified")} for row in accepted}
+    rows = []
+    for row in load_manifest(data / "sft-all-decisions.jsonl"):
+        if not row.get("supervision_eligible", True):
+            continue
+        rows.append({**row, **metadata[row["episode"]],
+                     "sample_id": f"{row['episode']}:{row['call_id']}"})
+    return sorted(rows, key=lambda row: (row["episode_order"], row["call_id"]))
+
+
+def resolve_images(value, reader):
+    if isinstance(value, tuple) and value[0] == "image_blob":
+        return value[1] + "," + base64.b64encode(reader.store.raw(value[2])).decode()
+    if isinstance(value, dict):
+        return {key: resolve_images(item, reader) for key, item in value.items()}
+    if isinstance(value, list):
+        return [resolve_images(item, reader) for item in value]
+    return value
+
+
+def parse_judge(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+    result = json.loads(text)
+    return result["faithful"] is True and not result["missing"] and not result["unsupported"], result
+
+
+class Rewriter:
+    def __init__(self, args):
+        from transformers import AutoTokenizer
+
+        self.args = args
+        self.tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
+        self.store = Store(args.output / "archive")
+        self.lock = threading.Lock()
+        self.started = time.time()
+        self.counts = defaultdict(int)
+
+    def count(self, text):
+        return len(self.tokenizer(text, add_special_tokens=False)["input_ids"])
+
+    def request(self, body, reader, folder, scope):
+        body = resolve_images(body, reader)
+        reference = self.store.put(body)
+        started = time.time()
+        record = {**scope, "started": started, "request_ref": reference,
+                  "request_sha256": digest(body), "current_answer_available": False,
+                  "future_fragments_available": False}
+        try:
+            request = Request(self.args.endpoint, data=json.dumps(body).encode(),
+                              headers={"Content-Type": "application/json"})
+            with urlopen(request, timeout=600) as response:
+                result = json.load(response)
+            record.update(response_ref=self.store.put(result), usage=result.get("usage"))
+            choice = result["choices"][0]
+            content = choice["message"].get("content")
+            if choice["finish_reason"] != "stop" or not content or "<think>" in content or "</think>" in content:
+                raise IncompleteRewrite("Incomplete local rewrite/judge response")
+            return choice["message"]["content"]
+        except (HTTPError, URLError, TimeoutError, ValueError) as error:
+            record["error"] = str(error)
+            if isinstance(error, HTTPError):
+                record["http_error"] = error.read().decode(errors="replace")[:3000]
+            raise
+        finally:
+            record["ended"] = time.time()
+            with (folder / "requests.jsonl").open("a") as stream:
+                stream.write(json.dumps(record) + "\n")
+            self.store.metadata("last_request", record["ended"])
+
+    def fragment(self, part, context, previous, reader, folder, sample_id):
+        source = part["text"]
+        scope = {"sample_id": sample_id, "source_start": part["start"],
+                 "source_end": part["end"], "source_sha256": digest(source),
+                 "causal_history_sha256": digest(context), "previous_sha256": digest(previous)}
+        if self.count(source) <= 96:
+            return source, {**scope, "outcome": "already_short", "attempts": []}
+        if not part["boundary_safe"]:
+            return source, {**scope, "outcome": "source_retained_at_identifier_boundary", "attempts": []}
+        feedback, attempts = None, []
+        known = previous + "\n" + context[0]["text"]
+        for attempt in range(2):
+            body = payload(context, previous, source, feedback=feedback,
+                           target_tokens=max(48, round(self.count(source) * 0.35)), seed=42 + attempt)
+            try:
+                candidate = self.request(body, reader, folder, {**scope, "operation": "compress", "attempt": attempt})
+                checks = mechanical_feedback(source, candidate, known)
+                judge_body = payload(context, previous, source, operation="judge", candidate=candidate)
+                judge_text = self.request(judge_body, reader, folder, {**scope, "operation": "judge", "attempt": attempt})
+            except IncompleteRewrite as error:
+                feedback = str(error)
+                attempts.append({"passed": False, "error": feedback})
+                continue
+            try:
+                faithful, judge = parse_judge(judge_text)
+            except (KeyError, ValueError, TypeError):
+                faithful, judge = False, {"invalid_judge_json": judge_text}
+            shorter = self.count(candidate) < self.count(source)
+            passed = faithful and not any(checks.values()) and shorter
+            attempts.append({"candidate": candidate, "checks": checks, "judge": judge,
+                             "shorter": shorter, "passed": passed})
+            if passed:
+                return candidate, {**scope, "outcome": "compressed", "attempts": attempts}
+            feedback = json.dumps({"checks": checks, "judge": judge, "must_be_shorter": not shorter})
+        return source, {**scope, "outcome": "source_retained_after_failed_verification", "attempts": attempts}
+
+    def decision(self, row, reader, prior, folder):
+        source_request = reader.value(row["request_ref"])
+        original = reader.value(row["response_ref"])["choices"][0]["message"]
+        history, matches = rewrite_history(source_request["messages"], prior)
+        context = evidence(history)
+        source = original.get("reasoning_content") or ""
+        parts = list(fragments(source, self.tokenizer, self.args.block_tokens))
+        if "".join(part["text"] for part in parts) != source:
+            raise ValueError("Reasoning segmentation is not lossless")
+        compact, audits = [], []
+        for part in parts:
+            text, audit = self.fragment(part, context, "".join(compact), reader, folder, row["sample_id"])
+            compact.append(text + "\n" if audit["outcome"] == "compressed" else text)
+            audits.append(audit)
+        reasoning = "".join(compact)
+        changes = [{"index": index, "source_sha256": digest(before.get("reasoning_content") or ""),
+                    "reasoning_content": after["reasoning_content"]}
+                   for index, (before, after) in enumerate(zip(source_request["messages"], history))
+                   if before.get("reasoning_content") != after.get("reasoning_content")]
+        overlay = {"policy": POLICY, "request_ref": row["request_ref"], "response_ref": row["response_ref"],
+                   "history": changes, "current_source_sha256": digest(source),
+                   "current_reasoning": reasoning}
+        proof = {"sample_id": row["sample_id"], "original_reasoning_tokens": self.count(source),
+                 "rewritten_reasoning_tokens": self.count(reasoning), "fragments": len(parts),
+                 "compressed_fragments": sum(a["outcome"] == "compressed" for a in audits),
+                 "fallback_fragments": sum(a["outcome"].startswith("source_retained") for a in audits),
+                 "answer_fields_sha256": digest(answer_fields(original)), "answer_fields_unchanged": True,
+                 "history_answer_fields_unchanged": all(answer_fields(a) == answer_fields(b)
+                     for a, b in zip(source_request["messages"], history)), **matches,
+                 "audit_ref": self.store.put(audits), "at": time.time()}
+        self.store.metadata(row["sample_id"], proof)
+        return {"row": {**row, "reasoning_rewrite": {"root": str(self.store.root.resolve()),
+                         "ref": self.store.put(overlay)}}, "proof": proof, "key": message_key(original)}
+
+    def episode(self, episode, rows):
+        folder = self.args.output / "episodes" / episode
+        folder.mkdir(parents=True, exist_ok=True)
+        reader, prior = Reader(rows[0]["snapshot_root"]), {}
+        for row in rows:
+            path = folder / (str(row["call_id"]) + ".json")
+            if path.exists():
+                result = json.loads(path.read_text())
+                if any(result["row"][key] != row[key] for key in ("request_ref", "response_ref")):
+                    raise ValueError("Resume source references changed")
+            else:
+                result = self.decision(row, reader, prior, folder)
+                atomic(path, result)
+            overlay = self.store.get(result["row"]["reasoning_rewrite"]["ref"])
+            key = result["key"]
+            if key in prior and prior[key] != overlay["current_reasoning"]:
+                raise ValueError("Ambiguous rewrite for an identical archived message")
+            prior[key] = overlay["current_reasoning"]
+            with self.lock:
+                proof = result["proof"]
+                self.counts["decisions"] += 1
+                for name in ("original_reasoning_tokens", "rewritten_reasoning_tokens", "compressed_fragments",
+                             "fallback_fragments", "unmatched_history_messages"):
+                    self.counts[name] += proof[name]
+                atomic(self.args.output / "progress.json", {"at": time.time(), "started": self.started,
+                    "phase": "rewriting", "source_commit": self.args.source_commit, **self.counts})
+                print(json.dumps({"episode": episode, **proof}), flush=True)
+        atomic(folder / "completed.json", {"episode": episode, "decisions": len(rows), "at": time.time()})
+
+
+def main():
+    from setproctitle import setproctitle
+
+    setproctitle("python")
+    parser = argparse.ArgumentParser(description=__doc__)
+    for key in ("data", "model", "output"):
+        parser.add_argument("--" + key, type=Path, required=True)
+    parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--block-tokens", type=int, default=768)
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    lease = (args.output / "worker.lock").open("a+")
+    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    lease.seek(0)
+    lease.truncate()
+    lease.write(str(os.getpid()) + "\n")
+    lease.flush()
+    rows = select_rows(args.data)
+    plan = {"policy": POLICY, "source_commit": args.source_commit, "rows": len(rows),
+            "source_index_sha256": digest(rows), "workers": args.workers, "block_tokens": args.block_tokens,
+            "model": str(args.model), "endpoint": args.endpoint, "current_answer_available": False,
+            "future_fragments_available": False, "training_started": False}
+    plan_path = args.output / "plan.json"
+    if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
+        raise ValueError("Existing output belongs to another source or rewrite policy")
+    atomic(plan_path, plan)
+    with urlopen(args.endpoint.split("/v1/")[0] + "/get_server_info", timeout=30) as response:
+        server = json.load(response)
+    if server["allow_auto_truncate"] is not False or server["tp_size"] != 4:
+        raise ValueError("Rewriter requires TP4 and explicit rejection of oversized prompts")
+    atomic(args.output / "server-contract.json", {key: server[key] for key in (
+        "model_path", "context_length", "tp_size", "allow_auto_truncate", "version")})
+    groups = defaultdict(list)
+    for row in rows:
+        groups[row["episode"]].append(row)
+    rewriter, failures = Rewriter(args), []
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        pending = {pool.submit(rewriter.episode, episode, group): episode for episode, group in groups.items()}
+        for future in as_completed(pending):
+            try:
+                future.result()
+            except Exception as error:
+                failure = {"episode": pending[future], "type": type(error).__name__, "error": str(error)}
+                failures.append(failure)
+                atomic(args.output / "failures.json", failures)
+                print(json.dumps(failure), flush=True)
+    if failures:
+        raise RuntimeError(f"{len(failures)} episodes incomplete; completed decisions are resumable")
+    with (args.output / "rewritten.jsonl").open("w") as stream:
+        for row in rows:
+            path = args.output / "episodes" / row["episode"] / (str(row["call_id"]) + ".json")
+            stream.write(json.dumps(json.loads(path.read_text())["row"]) + "\n")
+    atomic(args.output / "completed.json", {**plan, "at": time.time(), "counts": dict(rewriter.counts)})
+
+
+if __name__ == "__main__":
+    main()
