@@ -581,6 +581,9 @@ def main():
     config = json.loads(args.config.read_text())
     config.update({key: str(value) if isinstance(value, Path) else value
                    for key, value in vars(args).items() if value is not None and key not in ("config", "mode")})
+    if config.get("compile_enabled"):
+        os.environ["UNSLOTH_COMPILE_DISABLE"] = "0"
+        os.environ["UNSLOTH_COMPILE_LOCATION"] = config["compile_location"]
     if config["preflight_samples"] < 1:
         parser.error("preflight-samples must be positive")
     output = args.output.resolve()
@@ -608,6 +611,8 @@ def main():
             identity["execution_subset_sha256"] = hashlib.sha256(json.dumps(config["gate_indices"]).encode()).hexdigest()
         if config.get("mlp_tile_rows"):
             identity["mlp_tile_rows"] = config["mlp_tile_rows"]
+        if config.get("compile_enabled"):
+            identity["compile_enabled"] = True
         if config.get("resume_from_checkpoint"):
             checkpoint = Path(config["resume_from_checkpoint"])
             bridge = config.get("full_finetuning") and checkpoint.resolve() == Path(config["bridge_checkpoint"]).resolve()
