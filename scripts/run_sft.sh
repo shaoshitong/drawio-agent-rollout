@@ -3,6 +3,7 @@ set -euo pipefail
 
 base=${DRAWIO_SFT_ROOT:?Set DRAWIO_SFT_ROOT to the remote experiment directory}
 runtime=${DRAWIO_BASE_RUNTIME:?Set DRAWIO_BASE_RUNTIME to the existing CUDA runtime environment file}
+task_module=${DRAWIO_SFT_MODULE:-sft.train_unsloth}
 source "$runtime"
 export PATH="$base/env/bin:$PATH"
 export PYTHONPATH="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,6 +23,6 @@ if [[ ${DRAWIO_PROCESSES:-1} -gt 1 ]]; then
   export UNSLOTH_COMPILE_LOCATION="$base/unsloth_compiled_cache_eager_ddp"
   exec -a python "$base/env/bin/python" -m torch.distributed.run \
     --rdzv-backend=c10d --rdzv-endpoint=127.0.0.1:0 --local-addr=127.0.0.1 \
-    --nproc_per_node="$DRAWIO_PROCESSES" --module sft.train_unsloth "$@"
+    --nproc_per_node="$DRAWIO_PROCESSES" --module "$task_module" "$@"
 fi
-exec -a python "$base/env/bin/python" -m sft.train_unsloth "$@"
+exec -a python "$base/env/bin/python" -m "$task_module" "$@"

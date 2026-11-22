@@ -108,6 +108,7 @@ def main():
     for name in ("root", "source", "runtime", "config", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--offload", type=Path)
     args = parser.parse_args()
     args.output.mkdir(parents=True)
     config = json.loads(args.config.read_text())
@@ -115,7 +116,7 @@ def main():
     code = 1
     try:
         baseline = args.baseline or run_trial(args, config, "baseline", False, indices[:2])
-        offload = run_trial(args, config, "offload", True, indices[:2])
+        offload = args.offload or run_trial(args, config, "offload", True, indices[:2])
         result = compare(baseline, offload)
         write_json(args.output / "comparison.json", result)
         if not result["passed"]:
