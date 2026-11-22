@@ -80,6 +80,36 @@ def render(processor, messages, completion, tools, kwargs):
     return count + target_count, sha256(target.encode()).hexdigest(), target_count
 
 
+def verify_images(processor, reader, row, expected, keep):
+    from .data import token_sha256
+    from .export_sft import normalize
+
+    request, response = reader.store.get(row["request_ref"]), reader.store.get(row["response_ref"])
+    prompt, images = normalize(request["messages"], decode_images=False)
+    completion, _ = normalize([response["choices"][0]["message"]], decode_images=False)
+    prompt = clear_context(prompt, keep_results=keep)
+    kwargs = {**row.get("chat_template_kwargs", {"enable_thinking": True}), "tools": request.get("tools", [])}
+    count, target_hash, target_count = render(processor, prompt, completion, request.get("tools", []), kwargs)
+    if target_hash != expected["target_sha256"]:
+        raise ValueError("Native image materialization changed the target")
+    text = processor.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True, **kwargs)
+    encoded = processor(text=[text], images=images, truncation=False, padding=False,
+                        add_special_tokens=False, return_tensors="pt")
+    total = encoded["input_ids"].shape[-1] + target_count
+    prediction = expected["variants"][f"clear_tool_text_keep_{keep}"]
+    if count != prediction["text_tokens"]:
+        raise ValueError("Native image materialization changed text tokenization")
+    estimate = prediction["estimated_total_with_fixed_image_expansion"]
+    if estimate is not None and total != estimate:
+        raise ValueError("Fixed-image token estimate differs from native processing")
+    result = {"token_count": total, "image_count": len(images), "target_sha256": target_hash,
+              "prompt_token_sha256": token_sha256(encoded["input_ids"][0]),
+              "image_grid_thw": encoded["image_grid_thw"].tolist(), "keep_results": keep}
+    for image in images:
+        image.close()
+    return result
+
+
 def audit(args):
     from transformers import AutoProcessor
 
@@ -119,6 +149,9 @@ def audit(args):
                 "estimated_fits_context": total <= args.context if total is not None else None,
                 "text_only_fits_context": count <= args.context,
             }
+        if args.verify_keep_results is not None:
+            record["native_image_verification"] = verify_images(
+                processor, reader, row, record, args.verify_keep_results)
         records.append(record)
         print(json.dumps({"measured": len(records), "total": len(rows)}), flush=True)
     report = {"at": time.time(), "records": records, "context_limit": args.context,
@@ -140,6 +173,7 @@ def main():
     for name in ("manifest", "model", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--keep-results", nargs="+", type=int, default=[4, 8, 16])
+    parser.add_argument("--verify-keep-results", type=int, choices=[4, 8, 16])
     parser.add_argument("--context", type=int, default=262144)
     audit(parser.parse_args())
 
