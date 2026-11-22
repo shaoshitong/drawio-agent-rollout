@@ -145,6 +145,8 @@ def measure(row):
                                        add_special_tokens=False, return_tensors="pt")
         target_tokens = encoded_completion["input_ids"].shape[-1]
         prompt_tokens = encoded["input_ids"].shape[-1]
+        if row.get("state_prefix_input_tokens", prompt_tokens) != prompt_tokens:
+            raise ValueError("State prefix budget differs from native multimodal processing")
         total = prompt_tokens + target_tokens
         result = {
             "sample_id": row["sample_id"], "token_count": total,
@@ -164,6 +166,9 @@ def measure(row):
 def curriculum(args):
     records = read_jsonl(args.episodes)
     split = paper_split(records, args.seed, args.validation_fraction)
+    rewrites = None
+    if getattr(args, "rewrites", None):
+        rewrites = {row["sample_id"]: row for row in read_jsonl(args.rewrites)}
     decisions, duplicates = {}, 0
     for row in read_jsonl(args.decisions):
         ident = row.get("decision_id", f"{row['episode']}:{row['call_id']}")
@@ -199,13 +204,22 @@ def curriculum(args):
             if not row.get("supervision_eligible", True):
                 rejections.append({"sample_id": row["sample_id"], "rejection": "protocol_ineligible"})
                 continue
+            if rewrites is not None:
+                rewritten = rewrites[row["sample_id"]]
+                if any(rewritten[key] != row[key] for key in ("request_ref", "response_ref")):
+                    raise ValueError("Rewrite source references changed: " + row["sample_id"])
+                if rewritten.get("state_rejection"):
+                    rejections.append({"sample_id": row["sample_id"], **rewritten["state_rejection"]})
+                    continue
+                row = {**row, **{key: rewritten[key] for key in
+                    ("reasoning_rewrite", "state_prefix_input_tokens", "state_prefix_policy") if key in rewritten}}
             if row.get("data_part") != episode["data_part"]:
                 raise ValueError("Decision and episode refer to different data parts")
             selected.append({
                 "schema": "drawio-sft/1", "kind": "teacher_decision",
                 **{key: row[key] for key in ("sample_id", "episode", "call_id", "stage",
                                             "request_ref", "response_ref")},
-                **{key: row[key] for key in ("reasoning_rewrite",) if key in row},
+                **{key: row[key] for key in ("reasoning_rewrite", "state_prefix_input_tokens", "state_prefix_policy") if key in row},
                 **{key: episode[key] for key in ("snapshot_root", "paper_group", "split",
                     "final_components", "final_vertices", "final_edges", "final_image_cells",
                     "archived_final_render_verified", "fidelity_verified", "data_part")},
@@ -284,6 +298,7 @@ def main():
     parser.add_argument("--max-validation-episodes", type=int, default=0)
     parser.add_argument("--no-thinking", action="store_true")
     parser.add_argument("--resume-preparation", action="store_true")
+    parser.add_argument("--rewrites", type=Path)
     args = parser.parse_args()
     if not 0 < args.validation_fraction < 1 or args.max_tokens < 1:
         parser.error("validation-fraction must be between 0 and 1; max-tokens must be positive")
@@ -304,6 +319,8 @@ def main():
         "max_tokens": args.max_tokens, "tokenization": "unsloth_pc_split",
         "processor_image_settings": "unchanged model defaults",
     }
+    if args.rewrites:
+        policy["rewrites_sha256"] = digest(args.rewrites)
     previous, prior_accepted, prior_rejected, missing, resumed = {}, [], [], rejected, 0
     if args.resume_preparation:
         if not pending.exists():

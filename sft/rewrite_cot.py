@@ -73,6 +73,13 @@ class Rewriter:
         self.started = time.time()
         self.counts = defaultdict(int)
         self.context = ObservationContext(self) if args.rewrite_observations else None
+        self.state = None
+        if getattr(args, "state_prefix_model", None):
+            from transformers import AutoProcessor
+            from .state_context import StateContext
+
+            processor = AutoProcessor.from_pretrained(args.state_prefix_model, local_files_only=True)
+            self.state = StateContext(processor, ObservationContext(self))
 
     @lru_cache(maxsize=8192)
     def count(self, text):
@@ -151,6 +158,17 @@ class Rewriter:
 
     def decision(self, row, reader, prior, folder):
         source_request = reader.value(row["request_ref"])
+        state = None
+        if self.state:
+            from .state_prefix import snapshot_before_request
+
+            files, snapshot = snapshot_before_request(row, reader.store)
+            messages, state_proof = self.state.build(source_request, files,
+                lambda name: reader.store.raw(files[name]), row["stage"], row["request_ref"], reader.store.raw)
+            if messages is None:
+                return {"row": {**row, "state_rejection": state_proof},
+                        "proof": {"sample_id": row["sample_id"], **state_proof, "at": time.time()}, "key": None}
+            state = {**state_proof, "snapshot": snapshot, "source_request_ref": row["request_ref"], "messages": messages}
         original = reader.value(row["response_ref"])["choices"][0]["message"]
         history, matches = rewrite_history(source_request["messages"], prior)
         observations = []
@@ -174,7 +192,7 @@ class Rewriter:
         overlay = {"policy": POLICY, "request_ref": row["request_ref"], "response_ref": row["response_ref"],
                    "history": changes, "current_source_sha256": digest(source),
                    "current_reasoning": reasoning, "observations": observations,
-                   "context_policy": CONTEXT_POLICY if self.context else None}
+                   "context_policy": CONTEXT_POLICY if self.context else None, "state_prefix": state}
         proof = {"sample_id": row["sample_id"], "original_reasoning_tokens": self.count(source),
                  "rewritten_reasoning_tokens": self.count(reasoning), "fragments": len(parts),
                  "reused_prior_reasoning": reused,
@@ -185,7 +203,11 @@ class Rewriter:
                  "history_changes_match_observations": all(answer_fields(a) == answer_fields(b)
                      for a, b in zip(apply_observations(source_request["messages"], observations), history)), **matches,
                  "audit_ref": self.store.put(audits), "at": time.time()}
+        if state:
+            proof["state_prefix"] = {key: value for key, value in state.items() if key != "messages"}
         self.store.metadata(row["sample_id"], proof)
+        if state:
+            row = {**row, "state_prefix_input_tokens": state["input_tokens"], "state_prefix_policy": state["policy"]}
         return {"row": {**row, "reasoning_rewrite": {"root": str(self.store.root.resolve()),
                          "ref": self.store.put(overlay)}}, "proof": proof, "key": message_key(original)}
 
@@ -202,17 +224,19 @@ class Rewriter:
             else:
                 result = self.decision(row, reader, prior, folder)
                 atomic(path, result)
-            overlay = self.store.get(result["row"]["reasoning_rewrite"]["ref"])
             key = result["key"]
-            if key in prior and prior[key] != overlay["current_reasoning"]:
-                raise ValueError("Ambiguous rewrite for an identical archived message")
-            prior[key] = overlay["current_reasoning"]
+            if key is not None:
+                overlay = self.store.get(result["row"]["reasoning_rewrite"]["ref"])
+                if key in prior and prior[key] != overlay["current_reasoning"]:
+                    raise ValueError("Ambiguous rewrite for an identical archived message")
+                prior[key] = overlay["current_reasoning"]
             with self.lock:
                 proof = result["proof"]
                 self.counts["decisions"] += 1
+                self.counts["state_rejected" if key is None else "accepted"] += 1
                 for name in ("original_reasoning_tokens", "rewritten_reasoning_tokens", "compressed_fragments",
                              "fallback_fragments", "unmatched_history_messages"):
-                    self.counts[name] += proof[name]
+                    self.counts[name] += proof.get(name, 0)
                 atomic(self.args.output / "progress.json", {"at": time.time(), "started": self.started,
                     "phase": "rewriting", "source_commit": self.args.source_commit, **self.counts})
                 print(json.dumps({"episode": episode, **proof}), flush=True)
@@ -230,7 +254,9 @@ def main():
     parser.add_argument("--endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--block-tokens", type=int, default=768)
-    parser.add_argument("--rewrite-observations", action="store_true")
+    context_group = parser.add_mutually_exclusive_group()
+    context_group.add_argument("--rewrite-observations", action="store_true")
+    context_group.add_argument("--state-prefix-model", type=Path)
     parser.add_argument("--sample-decisions", type=int, default=0,
                         help="Frozen random train-only calibration; zero processes the full corpus")
     args = parser.parse_args()
@@ -251,6 +277,7 @@ def main():
             "future_fragments_available": False, "training_started": False}
     plan.update(calibration_only=bool(args.sample_decisions), selection_seed=20261122)
     plan["context_policy"] = CONTEXT_POLICY if args.rewrite_observations else None
+    plan["state_prefix_model"] = str(args.state_prefix_model) if args.state_prefix_model else None
     plan_path = args.output / "plan.json"
     if plan_path.exists() and json.loads(plan_path.read_text()) != plan:
         raise ValueError("Existing output belongs to another source or rewrite policy")

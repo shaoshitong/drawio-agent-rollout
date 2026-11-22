@@ -65,10 +65,45 @@ class Proxy(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def do_GET(self):
+        if self.path != "/health":
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         data = json.loads(body)
-        if self.server.strip_history or self.server.context_policy:
+        state_proof = None
+        if getattr(self.server, "state_policy", None):
+            from sft.state_prefix import CONTEXT_BUDGET
+            from sft.store import snapshot
+
+            store = self.server.state_store
+            reference = store.put(data)
+            snapshot_ref = snapshot(store, self.server.state_case)
+            files = store.get(snapshot_ref)
+            stage = 2 if "review1.json" in files else 1
+            try:
+                messages, state_proof = self.server.state_policy.build(data, files,
+                    lambda name: store.raw(files[name]), stage, reference, store.raw)
+            except Exception as error:
+                with self.server.audit.open("a") as log:
+                    log.write(json.dumps({"state_context_error": type(error).__name__, "at": time.time()}) + "\n")
+                self.send_error(502, "State preprocessing failed")
+                return
+            state_proof["snapshot_ref"] = snapshot_ref
+            store.metadata("last_state_prefix", state_proof)
+            if messages is None:
+                self.send_error(413, "Protected own state exceeds the fixed input budget")
+                return
+            data["messages"] = messages
+            data["max_tokens"] = min(data.get("max_tokens", CONTEXT_BUDGET), CONTEXT_BUDGET - state_proof["input_tokens"])
+            body = json.dumps(data, ensure_ascii=False).encode()
+        elif self.server.strip_history or self.server.context_policy:
             from sft.history import strip_history_thinking
             from sft.causal_cot import digest
 
@@ -92,6 +127,8 @@ class Proxy(BaseHTTPRequestHandler):
             "tool_observations": sum(m.get("role") == "tool" for m in data.get("messages", [])),
             "tool_definitions": len(data.get("tools", [])),
         }
+        if state_proof:
+            record["state_prefix"] = state_proof
         record["sampling"] = {
             key: data[key]
             for key in (
@@ -189,14 +226,17 @@ def main():
     parser.add_argument("--context-model", type=Path)
     parser.add_argument("--context-source-commit")
     parser.add_argument("--context-endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
+    parser.add_argument("--state-prefix-model", type=Path)
+    parser.add_argument("--state-case", type=Path)
     args = parser.parse_args()
-    if args.strip_history_thinking or args.context_cache:
+    if args.strip_history_thinking or args.context_cache or args.state_prefix_model:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Proxy)
     server.upstream = urlsplit(args.upstream)
     server.audit = args.audit
     server.capture_raw = args.capture_raw
     server.strip_history, server.context_policy = args.strip_history_thinking, None
+    server.state_policy = None
     if args.context_cache:
         from types import SimpleNamespace
         from sft.rewrite_cot import Rewriter
@@ -207,6 +247,17 @@ def main():
         editor = Rewriter(SimpleNamespace(model=args.context_model, output=args.context_cache,
             endpoint=args.context_endpoint, source_commit=args.context_source_commit, rewrite_observations=False))
         server.context_policy = ObservationContext(editor)
+        if args.state_prefix_model:
+            from transformers import AutoProcessor
+            from sft.state_context import StateContext
+
+            if not args.state_case:
+                parser.error("state-prefix-model requires state-case")
+            processor = AutoProcessor.from_pretrained(args.state_prefix_model, local_files_only=True)
+            server.state_policy = StateContext(processor, server.context_policy)
+            server.state_store, server.state_case = editor.store, args.state_case
+    elif args.state_prefix_model:
+        parser.error("state-prefix-model requires the causal editor context options")
     server.request_counter, server.request_limit, server.limit_reached = count(1), args.request_limit, False
     server.serve_forever()
 

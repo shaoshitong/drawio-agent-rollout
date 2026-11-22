@@ -9,4 +9,6 @@ export OMP_NUM_THREADS=1
 source_root=$(cd "$(dirname "$0")/.." && pwd)
 export PYTHONPATH="$source_root"
 cd "$source_root"
-exec -a python "$root/envs/serving/bin/python" -m sft.rewrite_cot "$@"
+python_bin=${SFT_PREPROCESS_PYTHON:-"$root/envs/serving/bin/python"}
+export PATH="$(dirname "$python_bin"):$PATH"
+exec -a python "$python_bin" -m sft.rewrite_cot "$@"

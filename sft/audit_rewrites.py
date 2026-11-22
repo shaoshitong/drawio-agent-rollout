@@ -43,7 +43,14 @@ def audit_row(row, reader, store, processor):
     compact = response["choices"][0]["message"]
     if answer_fields(original) != answer_fields(compact):
         raise ValueError("Current nonreasoning fields changed: " + row["sample_id"])
-    expected_history = apply_observations(original_request["messages"], overlay.get("observations", []))
+    state = overlay.get("state_prefix")
+    expected_history = state["messages"] if state else apply_observations(original_request["messages"], overlay.get("observations", []))
+    if state:
+        from .state_prefix import snapshot_before_request
+
+        files, snapshot = snapshot_before_request(row, reader.store)
+        if state["snapshot"] != snapshot or any(files[name] != value for name, value in state["files_sha256"].items()):
+            raise ValueError("State prefix file hashes differ from the exact pre-request snapshot")
     if len(request["messages"]) != len(expected_history) or any(
             answer_fields(a) != answer_fields(b)
             for a, b in zip(request["messages"], expected_history)):
@@ -92,7 +99,7 @@ def audit_wire(root, store, rows, readers):
             reader = readers[row["snapshot_root"]]
             if record["sample_id"].startswith("observation:"):
                 request = reader.value(record["archived_request_ref"])
-                sources = [text for message in request["messages"] if tool_result(message)
+                sources = [text for message in request["messages"] if tool_result(message) or message["role"] == "assistant"
                            for _, text in text_parts(message)]
                 sources = [text[len("<tool_response>"):-len("</tool_response>")]
                            if text.startswith("<tool_response>") and text.endswith("</tool_response>") else text
@@ -120,9 +127,12 @@ def main():
     readers, stores, records = {}, {}, []
     rows = load_manifest(args.manifest)
     for row in rows:
-        source, rewrite = row["snapshot_root"], row["reasoning_rewrite"]["root"]
+        source = row["snapshot_root"]
         if source not in readers:
             readers[source] = Reader(source)
+        if "reasoning_rewrite" not in row:
+            continue
+        rewrite = row["reasoning_rewrite"]["root"]
         if rewrite not in stores:
             stores[rewrite] = open_store(rewrite)
         records.append(audit_row(row, readers[source], stores[rewrite], processor))
@@ -138,8 +148,8 @@ def main():
                "omitted_overlap_fraction": omitted / overlap if overlap else 0,
                "overlap_scope": "Unique numeric overlap per decision, not proof of action dependencies; corpus-level reporting only",
                "current_answers_exact_and_history_changes_audited": True,
-               "wire": {root: audit_wire(Path(root).parent, store,
-                   [row for row in rows if row["reasoning_rewrite"]["root"] == root], readers)
+               "state_rejected_decisions": sum(bool(row.get("state_rejection")) for row in rows),
+               "wire": {root: audit_wire(Path(root).parent, store, rows, readers)
                    for root, store in stores.items()},
                "model_quality_acceptance": False, "answer_feedback_used_for_compression": False}
     args.output.write_text(json.dumps({"summary": summary, "decisions": records}, ensure_ascii=False, indent=2) + "\n")

@@ -83,6 +83,13 @@ def apply_rewrite(request, response, row, overlay):
         raise ValueError("Current reasoning source differs from the audited rewrite")
     if message.get("reasoning_content"):
         message["reasoning_content"] = overlay["current_reasoning"]
+    if overlay.get("state_prefix"):
+        from .state_prefix import POLICY as state_policy
+
+        state = overlay["state_prefix"]
+        if state["policy"] != state_policy or state["source_request_ref"] != row["request_ref"]:
+            raise ValueError("State prefix belongs to another request or policy")
+        request["messages"] = state["messages"]
     return request, response
 
 

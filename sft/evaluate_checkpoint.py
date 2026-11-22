@@ -29,11 +29,12 @@ def start_model(args):
     serving = args.out / "serving"
     create_overlay(args.model_path, serving, getattr(args, "sampling_preset", "precise-coding"),
                    preserve_tool_schema=True)
+    context = "32768" if getattr(args, "causal_context", False) else "262144"
     command = [sys.executable, "-m", "sglang.launch_server", "--model-path", str(serving),
                "--served-model-name", getattr(args, "generator_model", "Qwen/Qwen3.5-9B"),
                "--host", getattr(args, "host", "127.0.0.1"),
                "--port", str(args.port), "--tp", "1", "--dtype", "bfloat16",
-               "--context-length", "262144", "--max-total-tokens", "262144",
+               "--context-length", context, "--max-total-tokens", context,
                "--max-running-requests", "1", "--mem-fraction-static", "0.85",
                "--cuda-graph-max-bs", "1", "--max-mamba-cache-size", "16",
                "--sampling-defaults", "model", "--reasoning-parser", "qwen3",
@@ -51,6 +52,27 @@ def start_model(args):
     process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True,
                                env=environment)
     return process, log
+
+
+def start_context_proxy(args, case):
+    python = args.preprocessor_python or Path(sys.executable)
+    command = [str(python), str(HERE.parent / "rollout/trace_proxy.py"),
+        "--port", str(args.port + 101), "--upstream", f"http://127.0.0.1:{args.port}",
+        "--audit", str(args.out / "generator-context-requests.jsonl"), "--capture-raw",
+        "--context-cache", str(args.out / "context"), "--context-model", str(args.editor_model),
+        "--context-source-commit", args.source_commit, "--context-endpoint", args.editor_endpoint,
+        "--state-prefix-model", str(args.model_path), "--state-case", str(case)]
+    environment = dict(os.environ, PATH=str(python.parent) + os.pathsep + os.environ["PATH"],
+                       CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1", TOKENIZERS_PARALLELISM="false")
+    log = (args.out / "context-proxy.log").open("wb")
+    proxy = subprocess.Popen(command, stdout=log, stderr=log, env=environment, start_new_session=True)
+    try:
+        ready(proxy, args.port + 101, timeout=120)
+    except Exception:
+        stop_model(proxy, log)
+        raise
+    save(args.out / "context-proxy-command.json", command)
+    return proxy, log
 
 
 def stop_model(server, log):
@@ -75,20 +97,21 @@ def prepare_case(args):
 
 
 def evaluation_config(args, reviewer_url="", reviewer_auth=None):
+    causal = getattr(args, "causal_context", False)
     return SimpleNamespace(out=args.out, runtime=args.root / "runtime",
         render_runtime=args.root / "renderer", renderer_python=args.root / "renderer/venv/bin/python",
         python_runtime_root=Path(sys.base_prefix),
         extra_runtime_mounts=list(dict.fromkeys((Path(sys.prefix), Path(sys.prefix).resolve()))),
         generator_model=getattr(args, "generator_model", "Qwen/Qwen3.5-9B"), reviewer_model="deepseek-flash",
-        generator_url=f"http://127.0.0.1:{args.port}/v1",
+        generator_url=f"http://127.0.0.1:{args.port + (101 if causal else 0)}/v1",
         reviewer_url=reviewer_url, generator_auth_file=getattr(args, "generator_auth_file", None),
         reviewer_auth_file=reviewer_auth,
-        context_window=262144, reviewer_context_window=1048576, max_tokens=131072,
+        context_window=262144, reviewer_context_window=1048576, max_tokens=32768 if causal else 131072,
         reasoning_effort=getattr(args, "reasoning_effort", "high"),
         preserve_thinking=getattr(args, "preserve_thinking", False), qwen38_effort="xhigh",
         sampling_preset=getattr(args, "sampling_preset", "precise-coding"), reviewer_sampling_preset="model", seed=42,
         rounds=2, skill_mode="full", single_self_review=True, seeded=False, preserve_tool_schema=True,
-        resume=True, resume_note="", compaction_headroom_tokens=None, turn_timeout=21600)
+        resume=True, resume_note="", compaction_headroom_tokens=None, no_auto_compaction=causal, turn_timeout=21600)
 
 
 def reconstruct(args, key):
@@ -106,16 +129,22 @@ def reconstruct(args, key):
         "reviewer_context": config.reviewer_context_window, "reviewer_max_output": 32768,
         "reviewer_thinking": False, "reviewer_training_loss": False, "rounds": 2,
         "reviews": 1, "seed": 42, "generator_sampling": config.sampling_preset,
-        "native_compaction_unchanged": True, "preserve_thinking": config.preserve_thinking,
+        "native_compaction_unchanged": not getattr(args, "causal_context", False), "preserve_thinking": config.preserve_thinking,
         "full_skill": True, "single_self_review": True, "training": False,
         "gold_available": False, "gold_feedback": False, "mcp": False,
         "reference_sha256": sha256(args.reference.read_bytes()).hexdigest(),
         "deployment": getattr(args, "deployment", "Checkpoint served in BF16; numerical PEFT/export parity not yet certified"),
         "reviewer_matches_teacher_model": True, "reviewer_budget_cny": 12}
     protocol["preserve_raw_tool_schema"] = True
+    if getattr(args, "causal_context", False):
+        protocol.update(generator_context=32768, generator_raw_history_window=config.context_window,
+                        state_prefix_policy="own-state-prefix-v1", generator_auto_compaction=False)
     save(args.out / "protocol.json", protocol)
     generator_session = reviewer_session = None
+    context_proxy = context_log = None
     try:
+        if getattr(args, "causal_context", False):
+            context_proxy, context_log = start_context_proxy(args, case)
         for number in (1, 2):
             if getattr(args, "generator_service", None):
                 args.generator_service.stage = number
@@ -138,6 +167,8 @@ def reconstruct(args, key):
         save(args.out / "completed.json", result)
         print(json.dumps(result), flush=True)
     finally:
+        if context_proxy:
+            stop_model(context_proxy, context_log)
         reviewer.shutdown()
         reviewer.server_close()
         auth.unlink(missing_ok=True)
@@ -156,7 +187,13 @@ def main():
     parser.add_argument("--generator-model", default="Qwen/Qwen3.5-9B")
     parser.add_argument("--sampling-preset", default="precise-coding")
     parser.add_argument("--preserve-thinking", action="store_true")
+    parser.add_argument("--causal-context", action="store_true")
+    parser.add_argument("--editor-model", type=Path)
+    parser.add_argument("--editor-endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
+    parser.add_argument("--preprocessor-python", type=Path)
     args = parser.parse_args()
+    if args.causal_context and not args.editor_model:
+        parser.error("causal-context requires editor-model")
     args.root, args.out = args.root.absolute(), args.out.absolute()
     args.model_path, args.reference = args.model_path.resolve(), args.reference.resolve()
     key = sys.stdin.readline().strip()
