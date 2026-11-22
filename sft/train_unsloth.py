@@ -190,6 +190,13 @@ def make_collator(model, processor, examples, config, output):
             try:
                 batch = super().__call__(materialized)
                 self.last_report = audit_batch(model, processor, materialized, batch, config["max_seq_length"])
+                if "thinking_loss_weight" in config:
+                    from .weighted_loss import token_weights
+
+                    batch["loss_weights"] = token_weights(
+                        batch["labels"], [item["has_reasoning"] for item in self.last_report],
+                        processor.tokenizer.convert_tokens_to_ids("</think>"), config["thinking_loss_weight"],
+                    )
             except Exception as error:
                 write_json(output / "runtime-audit-failure.json", {
                     "status": "failed", "sample_ids": [x["sample_id"] for x in materialized],
@@ -258,6 +265,10 @@ def setup(config):
             "rows": config["mlp_tile_rows"], "tiled": tiled.tiled, "skipped": tiled.skipped,
         })
     use_linear_patch_embedding(model)
+    if "thinking_loss_weight" in config:
+        from .weighted_loss import install_weighted_loss
+
+        install_weighted_loss(model)
     examples = Examples(config["manifest"], config["split"], config["enable_thinking"],
                         config.get("max_train_samples"), config.get("store_path"))
     collator = make_collator(model, processor, examples, config, Path(config["output"]))
@@ -511,7 +522,7 @@ def train(config, model, processor, examples, collator, output):
         offload = OffloadActivations(use_streams=False)
         offload.update_model_params(trainer.model)
         trainer.maybe_activation_offload_context = offload
-    if config.get("full_finetuning"):
+    if config.get("full_finetuning") or "thinking_loss_weight" in config:
         # The fused Qwen forward consumes this count, but the bare HF model
         # declares False. Set the Trainer flag after all Unsloth init patches.
         trainer.model_accepts_loss_kwargs = True
@@ -609,6 +620,8 @@ def main():
                                        "phase_decay_updates", "phase_min_lr_ratio", "vision_lr_ratio")}
         identity["world_size"] = int(os.environ.get("WORLD_SIZE", "1"))
         identity["manifest_sha256"] = hashlib.sha256(args.manifest.read_bytes()).hexdigest()
+        if "thinking_loss_weight" in config:
+            identity["thinking_loss_weight"] = config["thinking_loss_weight"]
         if config.get("activation_offloading"):
             identity["activation_offloading"] = True
         if config.get("sampling_pool"):
