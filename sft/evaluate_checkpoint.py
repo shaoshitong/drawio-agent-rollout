@@ -45,8 +45,10 @@ def start_model(args, python=None):
     environment = dict(os.environ, PATH=str(Path(python or sys.executable).parent) + os.pathsep + os.environ["PATH"],
         CUDA_VISIBLE_DEVICES=args.gpu, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
         OMP_NUM_THREADS="4", TOKENIZERS_PARALLELISM="false")
-    if getattr(args, "generator_model", "") == "Qwen/Qwen3.8-27B":
+    compat = getattr(args, "generator_model", "") == "Qwen/Qwen3.8-27B"
+    if compat:
         environment["DSH_QWEN38_PARSER_COMPAT"] = "1"
+    if compat or environment.get("DSH_MASK_PROCESS_TITLE") == "1":
         environment["PYTHONPATH"] = os.pathsep.join((str(HERE.parent / "rollout/h20_bootstrap"),
             str(HERE.parent / "rollout"), environment.get("PYTHONPATH", "")))
     process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True,
