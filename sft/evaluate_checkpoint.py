@@ -154,8 +154,6 @@ def reconstruct(args, key):
         protocol["resumed_generator_from"] = str(previous)
     save(args.out / "protocol.json", protocol)
     generator_session = reviewer_session = None
-    if previous:
-        generator_session = json.loads((previous / "generator/round1/status.json").read_text())["session_id"]
     context_proxy = context_log = None
     try:
         if getattr(args, "causal_context", False):
