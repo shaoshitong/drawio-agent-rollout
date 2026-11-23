@@ -101,7 +101,7 @@ class Proxy(BaseHTTPRequestHandler):
                 self.send_error(413, "Protected own state exceeds the fixed input budget")
                 return
             data["messages"] = messages
-            data["max_tokens"] = min(data.get("max_tokens", CONTEXT_BUDGET), CONTEXT_BUDGET - state_proof["input_tokens"])
+            data["max_tokens"] = min(data.get("max_tokens", CONTEXT_BUDGET), CONTEXT_BUDGET - state_proof["input_tokens"] - 1)
             body = json.dumps(data, ensure_ascii=False).encode()
         elif self.server.strip_history or self.server.context_policy:
             from sft.history import strip_history_thinking
