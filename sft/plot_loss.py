@@ -101,8 +101,14 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--title", default="Trajectory SFT")
     parser.add_argument("--total-steps", type=int)
+    parser.add_argument("--watch-interval", type=float, default=0, help="Seconds between local exports; zero exports once")
     args = parser.parse_args()
-    print(json.dumps(export(args.log, args.output, args.title, args.total_steps)))
+    while True:
+        result = export(args.log, args.output, args.title, args.total_steps)
+        print(json.dumps(result), flush=True)
+        if not args.watch_interval or (args.total_steps and result["completed_updates"] >= args.total_steps):
+            break
+        time.sleep(args.watch_interval)
 
 
 if __name__ == "__main__":
