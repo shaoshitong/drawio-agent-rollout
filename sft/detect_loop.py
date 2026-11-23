@@ -1,4 +1,4 @@
-"""Audit and optionally stop a DSH actor repeatedly saving unread reference crops."""
+"""Audit repeated reference crops and severe exact repetitions in reasoning."""
 
 import argparse
 import ast
@@ -10,6 +10,22 @@ import shlex
 import signal
 import subprocess
 import time
+
+
+def reasoning_loop(text, threshold=16):
+    """Detect long literal repetition; code, arguments and answers are not inputs."""
+    width = 200
+    if len(text) < threshold * width:
+        return None
+    starts = list(range(0, len(text) - width + 1, width)) + [len(text) - width]
+    for start in starts:
+        block = text[start:start + width]
+        occurrences = text.count(block)
+        if occurrences >= threshold:
+            return {"threshold": threshold, "occurrences": occurrences,
+                    "block_characters": width, "reasoning_characters": len(text),
+                    "block_sha256": sha256(block.encode()).hexdigest()}
+    return None
 
 
 def crop_rectangles(command):

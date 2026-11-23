@@ -124,6 +124,8 @@ def run_generation(config, number, session):
 
 
 def generation_retry_reason(folder, state):
+    if (folder / "host-loop-outcome.json").exists():
+        return None
     if state.get("timed_out"):
         return "timeout"
     if state.get("validation_error") == "missing_candidate_xml" or (

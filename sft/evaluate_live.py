@@ -10,10 +10,13 @@ from threading import Event, Thread
 import time
 
 from .evaluate_checkpoint import reconstruct, ready, save, start_model, stop_model
+from .detect_loop import reasoning_loop
 from h20_eval import environment, start_server
+from trace_proxy import response_summary
 
 
-def watch_memory(devices, services, done, output):
+def watch_evaluation(devices, services, done, output):
+    started = time.time()
     while not done.wait(5):
         raw = subprocess.check_output(["nvidia-smi", "-i", devices,
             "--query-gpu=memory.free", "--format=csv,noheader,nounits"], text=True)
@@ -23,6 +26,22 @@ def watch_memory(devices, services, done, output):
                  "action": "stop evaluation services only"})
             for process, log in services:
                 stop_model(process, log)
+            return
+        raw = output / "evaluation/generator-context-requests-raw"
+        paths = sorted(raw.glob("*.response.bin"))
+        if not paths or paths[-1].stat().st_mtime < started:
+            continue
+        summary = response_summary([paths[-1].read_bytes()], with_reasoning=True)
+        loop = reasoning_loop(summary["reasoning_text"])
+        if loop:
+            save(output / "evaluation/host-loop-outcome.json", {
+                "outcome": "HOST_DETECTED_REASONING_LOOP", "at": time.time(),
+                "natural_model_end": False, "completed_reconstruction": False,
+                "exploratory_posthoc_rule": True,
+                "training_modified": False, "raw_trace_retained": True,
+                "response": str(paths[-1]), "audit": loop})
+            process, log = services[-1]
+            stop_model(process, log)
             return
 
 
@@ -54,7 +73,7 @@ def main():
     args.preserve_thinking = False
     args.deployment = "Frozen full-parameter checkpoint loaded in BF16; shared training GPUs"
     services, done = [], Event()
-    watcher = Thread(target=watch_memory, args=(args.gpu + "," + args.editor_gpu,
+    watcher = Thread(target=watch_evaluation, args=(args.gpu + "," + args.editor_gpu,
                      services, done, args.out), daemon=True)
     watcher.start()
     try:

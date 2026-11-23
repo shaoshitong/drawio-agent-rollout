@@ -10,6 +10,7 @@ from .audit_context_budget import template_messages, tool_result
 from .causal_cot import anchors, answer_fields, apply_rewrite, digest, numbers, protected_values
 from .check_prefix_chains import Reader
 from .data import load_manifest, open_store
+from .detect_loop import reasoning_loop
 from .history import HISTORY_POLICY, strip_history_thinking
 from .observation_context import apply_observations, text_parts
 
@@ -73,6 +74,7 @@ def audit_row(row, reader, store, processor):
             "answer_sha256": digest(answer_fields(original)), "native_answer_sha256": digest(before),
             "answer_overlap_values": len(overlap), "omitted_answer_overlap_values": len(overlap - numbers(rewritten)),
             "omitted_source_anchors": len(anchors(source) - anchors(rewritten)),
+            "severe_reasoning_loop": reasoning_loop(rewritten),
             "answer_fields_exact": True, "history_changes_match_audited_observations": True,
             "observation_summaries": len(overlay.get("observations", [])), "native_answer_exact": True}
 
