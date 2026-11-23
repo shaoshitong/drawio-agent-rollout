@@ -10,7 +10,7 @@ import re
 import time
 
 from .audit_actions import category
-from .data import open_store
+from .data import ManifestDataset
 from .export_sft import normalize
 from .train_unsloth import render_completion
 
@@ -90,19 +90,16 @@ def summarize(records):
 def audit(args):
     from transformers import AutoProcessor
 
-    rows = [json.loads(line) for line in args.manifest.read_text().splitlines()]
-    rows = [row for row in rows if row["split"] == args.split]
+    dataset = ManifestDataset(args.manifest, split=args.split, decode_images=False)
+    rows = dataset.rows
     if args.limit:
         rows = rows[:args.limit]
     processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
-    stores, records = {}, []
+    records = []
     args.output.mkdir(parents=True, exist_ok=False)
     with (args.output / "decisions.jsonl").open("w") as stream:
         for index, row in enumerate(rows):
-            root = row["snapshot_root"]
-            if root not in stores:
-                stores[root] = open_store(root)
-            message = stores[root].get(row["response_ref"])["choices"][0]["message"]
+            message = dataset[index]["completion"][0]
             record = {
                 **{key: row[key] for key in ("sample_id", "episode", "stage", "prompt_tokens")},
                 "target_tokens": row["completion_tokens"],

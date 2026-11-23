@@ -66,11 +66,11 @@ def open_store(root):
     return ReadOnlyStore(root)
 
 
-def materialize(row, base_dir, store=None, rewrite_store=None):
+def materialize(row, base_dir, store=None, rewrite_store=None, *, decode_images=True):
     root = Path(base_dir) / row["snapshot_root"]
     rewrite = row.get("reasoning_rewrite")
     overlay = (rewrite_store or open_store(rewrite["root"])).get(rewrite["ref"]) if rewrite else None
-    example = teacher_example(store or open_store(root), row, rewrite=overlay)
+    example = teacher_example(store or open_store(root), row, decode_images=decode_images, rewrite=overlay)
     if not row.get("supervision_eligible", True) or not example["supervision_eligible"]:
         raise ValueError("Interrupted decision is not an SFT target: " + row["sample_id"])
     for message in example["prompt"] + example["completion"]:
@@ -95,10 +95,11 @@ def materialize(row, base_dir, store=None, rewrite_store=None):
 class ManifestDataset:
     """Keep references in memory; load each decision and its images on demand."""
 
-    def __init__(self, manifest, split=None, store_path=None):
+    def __init__(self, manifest, split=None, store_path=None, *, decode_images=True):
         self.path = Path(manifest).resolve()
         self.rows = load_manifest(self.path, split)
         self.store_path = Path(store_path) if store_path else None
+        self.decode_images = decode_images
         self.stores = {}
         self.rewrite_stores = {}
 
@@ -115,4 +116,4 @@ class ManifestDataset:
         if rewrite and rewrite["root"] not in self.rewrite_stores:
             self.rewrite_stores[rewrite["root"]] = open_store(rewrite["root"])
         return materialize(row, self.path.parent, self.stores[key],
-                           self.rewrite_stores[rewrite["root"]] if rewrite else None)
+                           self.rewrite_stores[rewrite["root"]] if rewrite else None, decode_images=self.decode_images)
