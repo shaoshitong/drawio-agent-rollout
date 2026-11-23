@@ -113,8 +113,9 @@ def main():
     args = parser.parse_args()
     if args.cases and args.resume_generator:
         parser.error("--resume-generator applies to a single --reference")
-    if args.gpu == args.editor_gpu or not {args.gpu, args.editor_gpu} <= {"4", "5", "6", "7"}:
-        parser.error("Use two different task-owned GPUs among 4-7")
+    devices = [args.gpu, *args.editor_gpu.split(",")]
+    if len(set(devices)) != len(devices) or not set(devices) <= {"4", "5", "6", "7"}:
+        parser.error("Use distinct task-owned GPUs among 4-7")
     key = sys.stdin.readline().strip()
     if not key:
         parser.error("Reviewer credential must arrive on private stdin")
