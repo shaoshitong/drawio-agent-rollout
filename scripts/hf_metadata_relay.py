@@ -22,7 +22,8 @@ def is_metadata(method, url):
         parsed.scheme == "https"
         and parsed.hostname == "huggingface.co"
         and method in ("GET", "HEAD", "POST")
-        and (parsed.path.startswith("/api/") or parsed.path.endswith("/info/lfs/objects/batch"))
+        and (parsed.path.startswith("/api/")
+             or parsed.path.endswith(("/info/lfs/objects/batch", "/info/lfs/objects/verify")))
     )
 
 

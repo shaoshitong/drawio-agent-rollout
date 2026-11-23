@@ -37,7 +37,8 @@ class UploadSession(requests.Session):
         metadata = (
             host == "huggingface.co"
             and request.method in ("GET", "HEAD", "POST")
-            and (url.path.startswith("/api/") or url.path.endswith("/info/lfs/objects/batch"))
+            and (url.path.startswith("/api/")
+                 or url.path.endswith(("/info/lfs/objects/batch", "/info/lfs/objects/verify")))
         )
         proxy = self.proxy if metadata or self.bulk_proxy else None
         kwargs["proxies"] = {"https": proxy, "http": proxy}
