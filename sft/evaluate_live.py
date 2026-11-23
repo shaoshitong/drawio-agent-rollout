@@ -2,6 +2,7 @@
 
 import argparse
 from copy import copy
+from hashlib import sha256
 import json
 from pathlib import Path
 import subprocess
@@ -15,8 +16,8 @@ from h20_eval import environment, start_server
 from trace_proxy import response_summary
 
 
-def watch_evaluation(devices, services, done, output):
-    started = time.time()
+def watch_evaluation(devices, services, done, output, active=None):
+    active = active if active is not None else {"folder": output / "evaluation", "started": time.time()}
     while not done.wait(5):
         raw = subprocess.check_output(["nvidia-smi", "-i", devices,
             "--query-gpu=memory.free", "--format=csv,noheader,nounits"], text=True)
@@ -27,14 +28,15 @@ def watch_evaluation(devices, services, done, output):
             for process, log in services:
                 stop_model(process, log)
             return
-        raw = output / "evaluation/generator-context-requests-raw"
+        folder = active["folder"]
+        raw = folder / "generator-context-requests-raw"
         paths = sorted(raw.glob("*.response.bin"))
-        if not paths or paths[-1].stat().st_mtime < started:
+        if not paths or paths[-1].stat().st_mtime < active["started"]:
             continue
         summary = response_summary([paths[-1].read_bytes()], with_reasoning=True)
         loop = reasoning_loop(summary["reasoning_text"])
         if loop:
-            save(output / "evaluation/host-loop-outcome.json", {
+            save(folder / "host-loop-outcome.json", {
                 "outcome": "HOST_DETECTED_REASONING_LOOP", "at": time.time(),
                 "natural_model_end": False, "completed_reconstruction": False,
                 "exploratory_posthoc_rule": True,
@@ -45,10 +47,61 @@ def watch_evaluation(devices, services, done, output):
             return
 
 
+def load_references(args):
+    records = json.loads(args.cases.read_text())["cases"] if args.cases else [
+        {"episode": "reference", "reference_png": str(args.reference)}]
+    if not records:
+        raise ValueError("The reference set is empty")
+    references = []
+    for record in records:
+        path = Path(record["reference_png"])
+        if args.cases and not path.is_absolute():
+            path = args.cases.parent / path
+        digest = sha256(path.read_bytes()).hexdigest()
+        if args.cases and digest != record["reference_sha256"]:
+            raise ValueError("Reference image hash changed: " + record["episode"])
+        references.append({"episode": record["episode"], "reference_png": str(path.resolve()),
+                           "reference_sha256": digest})
+    return references
+
+
+def run_references(args, key, references, active):
+    results = []
+    for record in references:
+        case = copy(args)
+        case.reference = Path(record["reference_png"])
+        case.out = args.out / "evaluation"
+        if args.cases:
+            case.out /= record["episode"]
+        case.out.mkdir(parents=True)
+        active.update(folder=case.out, started=time.time())
+        row = {"episode": record["episode"], "out": str(case.out), "completed": False,
+               "fidelity_verified": False}
+        try:
+            reconstruct(case, key)
+            reference = case.out / "case/reference.png"
+            if sha256(reference.read_bytes()).hexdigest() != record["reference_sha256"]:
+                raise ValueError("Evaluated reference differs from the frozen input")
+            result = json.loads((case.out / "completed.json").read_text())
+            if not result["completed"]:
+                raise RuntimeError("Reconstruction did not complete")
+            row.update(completed=result["completed"], candidate=result["candidate"])
+        except Exception as error:
+            row.update(error=type(error).__name__ + ": " + str(error))
+            raise
+        finally:
+            results.append(row)
+            save(args.out / "evaluation-results.json", {"total": len(references), "cases": results,
+                 "unattempted": [item["episode"] for item in references[len(results):]]})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("root", "model-path", "out", "reference"):
+    for name in ("root", "model-path", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
+    references = parser.add_mutually_exclusive_group(required=True)
+    references.add_argument("--reference", type=Path)
+    references.add_argument("--cases", type=Path, help="Frozen cases with reference_png and reference_sha256")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--resume-generator", type=Path)
     parser.add_argument("--gpu", default="6")
@@ -58,6 +111,8 @@ def main():
     parser.add_argument("--mem-fraction-static", type=float, default=0.25)
     parser.add_argument("--editor-fraction", type=float, default=0.56)
     args = parser.parse_args()
+    if args.cases and args.resume_generator:
+        parser.error("--resume-generator applies to a single --reference")
     if args.gpu == args.editor_gpu or not {args.gpu, args.editor_gpu} <= {"4", "5", "6", "7"}:
         parser.error("Use two different task-owned GPUs among 4-7")
     key = sys.stdin.readline().strip()
@@ -73,10 +128,13 @@ def main():
     args.preserve_thinking = False
     args.deployment = "Frozen full-parameter checkpoint loaded in BF16; shared training GPUs"
     services, done = [], Event()
+    active = {"folder": args.out / "evaluation", "started": time.time()}
     watcher = Thread(target=watch_evaluation, args=(args.gpu + "," + args.editor_gpu,
-                     services, done, args.out), daemon=True)
+                     services, done, args.out, active), daemon=True)
     watcher.start()
     try:
+        references = load_references(args)
+        save(args.out / "references.json", {"references": references})
         editor = start_server(args.root, args.out / "editor", "generator", "Qwen3.8-27B",
             args.editor_gpu, args.editor_port, 262144, args.editor_fraction,
             environment(args.root), sampling="qwen38")
@@ -92,10 +150,7 @@ def main():
              "generator_pid": generator[0].pid, "generator_gpu": args.gpu,
              "editor_gpu": args.editor_gpu, "training_unchanged": True,
              "source_commit": args.source_commit})
-        case = copy(args)
-        case.out = args.out / "evaluation"
-        case.out.mkdir()
-        reconstruct(case, key)
+        run_references(args, key, references, active)
     except Exception as error:
         save(args.out / "failure.json", {"at": time.time(), "type": type(error).__name__,
              "message": str(error)})
