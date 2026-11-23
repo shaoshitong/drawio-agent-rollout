@@ -84,6 +84,13 @@ class Proxy(BaseHTTPRequestHandler):
         data = json.loads(body)
         state_proof = None
         if getattr(self.server, "state_policy", None):
+            tools = data.get("tools") or []
+            for tool in tools:
+                tool["function"].setdefault("strict", False)
+            data["tools"] = tools
+            data["chat_template_kwargs"] = {
+                **(data.get("chat_template_kwargs") or {}), "drawio_raw_tools": tools,
+            }
             from sft.state_prefix import CONTEXT_BUDGET
             from sft.store import snapshot
 
