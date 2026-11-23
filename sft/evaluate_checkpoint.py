@@ -25,12 +25,12 @@ from setup_sampling import create_overlay
 from store import Store
 
 
-def start_model(args):
+def start_model(args, python=None):
     serving = args.out / "serving"
     create_overlay(args.model_path, serving, getattr(args, "sampling_preset", "precise-coding"),
                    preserve_tool_schema=True)
     context = "32768" if getattr(args, "causal_context", False) else "262144"
-    command = [sys.executable, "-m", "sglang.launch_server", "--model-path", str(serving),
+    command = [str(python or sys.executable), "-m", "sglang.launch_server", "--model-path", str(serving),
                "--served-model-name", getattr(args, "generator_model", "Qwen/Qwen3.5-9B"),
                "--host", getattr(args, "host", "127.0.0.1"),
                "--port", str(args.port), "--tp", "1", "--dtype", "bfloat16",
@@ -42,7 +42,7 @@ def start_model(args):
                json.dumps({"min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0})]
     save(args.out / "server-command.json", command)
     log = (args.out / "server.log").open("wb")
-    environment = dict(os.environ, PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+    environment = dict(os.environ, PATH=str(Path(python or sys.executable).parent) + os.pathsep + os.environ["PATH"],
         CUDA_VISIBLE_DEVICES=args.gpu, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
         OMP_NUM_THREADS="4", TOKENIZERS_PARALLELISM="false")
     if getattr(args, "generator_model", "") == "Qwen/Qwen3.8-27B":

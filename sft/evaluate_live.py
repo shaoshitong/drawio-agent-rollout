@@ -65,7 +65,7 @@ def main():
         serving = copy(args)
         serving.out = args.out / "generator-service"
         serving.out.mkdir()
-        generator = start_model(serving)
+        generator = start_model(serving, args.root / "envs/serving/bin/python")
         services.append(generator)
         ready(generator[0], args.port, timeout=900)
         save(args.out / "services.json", {"at": time.time(), "editor_pid": editor[0].pid,
