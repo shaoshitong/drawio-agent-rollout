@@ -31,6 +31,7 @@ def main():
     for name in ("root", "model-path", "out", "reference"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--resume-generator", type=Path)
     parser.add_argument("--gpu", default="6")
     parser.add_argument("--editor-gpu", default="7")
     parser.add_argument("--port", type=int, default=32680)

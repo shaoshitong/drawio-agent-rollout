@@ -1,6 +1,8 @@
 """Causal observation summaries shared by offline data and the inference proxy."""
 
 from copy import deepcopy
+from ast import literal_eval
+from itertools import groupby
 import json
 from pathlib import Path
 import re
@@ -48,6 +50,34 @@ def apply_observations(messages, changes):
         else:
             message["content"][part]["text"] = change["text"]
     return result
+
+
+PIXEL_ROW = re.compile(r"(?m)^(\d+[ \t]+)(\[(?:\(\d+,\s*\d+,\s*\d+\)(?:,\s*)?)+\])$")
+
+
+def encode_pixel_runs(text):
+    def encode(match):
+        runs = [[len(list(group)), *pixel] for pixel, group in groupby(literal_eval(match[2]))]
+        return match[1] + "rgb_runs=" + json.dumps(runs, separators=(",", ":"))
+
+    packed = PIXEL_ROW.sub(encode, text)
+    header = "Lossless pixel rows: each [count,R,G,B] expands to count consecutive RGB triples.\n"
+    return header + packed if len(header) + len(packed) < len(text) else text
+
+
+def pixel_observation_changes(index, message):
+    for part, source in text_parts(message):
+        value = encode_pixel_runs(source)
+        if value != source:
+            yield {"index": index, "part": part, "source_sha256": digest(source), "text": value}
+
+
+def pack_pixel_observations(messages):
+    changes = []
+    for index, message in enumerate(messages):
+        if tool_result(message):
+            changes.extend(pixel_observation_changes(index, message))
+    return apply_observations(messages, changes), changes
 
 
 class ObservationContext:

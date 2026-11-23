@@ -117,7 +117,12 @@ def evaluation_config(args, reviewer_url="", reviewer_auth=None):
 
 
 def reconstruct(args, key):
-    case = prepare_case(args)
+    previous = getattr(args, "resume_generator", None)
+    if previous:
+        shutil.copytree(previous, args.out, dirs_exist_ok=True, symlinks=True)
+        case = args.out / "case"
+    else:
+        case = prepare_case(args)
     store = Store(args.out / "reviewer-archive")
     token = secrets.token_urlsafe(32)
     auth = args.out / "reviewer-auth.json"
@@ -141,8 +146,12 @@ def reconstruct(args, key):
     if getattr(args, "causal_context", False):
         protocol.update(generator_context=32768, generator_raw_history_window=config.context_window,
                         state_prefix_policy="own-state-prefix-v2", generator_auto_compaction=False)
+    if previous:
+        protocol["resumed_generator_from"] = str(previous)
     save(args.out / "protocol.json", protocol)
     generator_session = reviewer_session = None
+    if previous:
+        generator_session = json.loads((previous / "generator/round1/status.json").read_text())["session_id"]
     context_proxy = context_log = None
     try:
         if getattr(args, "causal_context", False):

@@ -213,5 +213,12 @@ def build_state_prefix(messages, files, read_file, stage, counter, summaries=())
                 "original_cycles": len(cycles), "files_sha256": hashes,
                 "latest_xml_fulltext_injected": injected,
                 "history_thinking_messages": 0, "targets_used_to_build_input": False}
+    from .observation_context import pack_pixel_observations
+
+    packed, changes = pack_pixel_observations(messages)
+    if changes:
+        candidate, proof = build_state_prefix(packed, files, read_file, stage, counter, summaries)
+        proof["lossless_pixel_observations"] = len(changes)
+        return candidate, proof
     return None, {"policy": POLICY, "rejection": "protected_state_exceeds_input_budget",
                    "input_tokens": count, "files_sha256": hashes, "targets_used_to_build_input": False}
