@@ -17,3 +17,8 @@ if os.environ.get("DSH_QWEN38_PARSER_COMPAT") == "1":
     from qwen38_parser import install
 
     install()
+
+if os.environ.get("DSH_MATCH_TRAINING_IMAGES") == "1":
+    from training_images import install
+
+    install()

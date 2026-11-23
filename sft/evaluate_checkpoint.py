@@ -48,7 +48,10 @@ def start_model(args, python=None):
     compat = getattr(args, "generator_model", "") == "Qwen/Qwen3.8-27B"
     if compat:
         environment["DSH_QWEN38_PARSER_COMPAT"] = "1"
-    if compat or environment.get("DSH_MASK_PROCESS_TITLE") == "1":
+    causal = getattr(args, "causal_context", False)
+    if causal:
+        environment["DSH_MATCH_TRAINING_IMAGES"] = "1"
+    if compat or causal or environment.get("DSH_MASK_PROCESS_TITLE") == "1":
         environment["PYTHONPATH"] = os.pathsep.join((str(HERE.parent / "rollout/h20_bootstrap"),
             str(HERE.parent / "rollout"), environment.get("PYTHONPATH", "")))
     process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True,
@@ -145,7 +148,8 @@ def reconstruct(args, key):
     protocol["preserve_raw_tool_schema"] = True
     if getattr(args, "causal_context", False):
         protocol.update(generator_context=32768, generator_raw_history_window=config.context_window,
-                        state_prefix_policy="own-state-prefix-v2", generator_auto_compaction=False)
+                        state_prefix_policy="own-state-prefix-v2", generator_auto_compaction=False,
+                        image_preprocessing="training-native-cpu")
     if previous:
         protocol["resumed_generator_from"] = str(previous)
     save(args.out / "protocol.json", protocol)
