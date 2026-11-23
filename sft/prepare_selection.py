@@ -1,4 +1,4 @@
-"""Select visible, bounded decisions without retaining inspection-only phases."""
+"""Select bounded decisions while preserving individually eligible complex phases."""
 
 import argparse
 from collections import Counter, defaultdict
@@ -17,8 +17,22 @@ from .rewrite_cot import atomic, select_rows
 from .sampling_pool import phase_guards
 from .state_prefix import NativeCounter, build_state_prefix, snapshot_before_request
 
-POLICY = "decision-visibility-cap64-v2"
+POLICY = "decision-visibility-cap64-v3"
 PROGRESS = {"native_xml_changed", "code_file_changed", "candidate_render_changed"}
+
+
+def cap_decisions(eligible, protected, cap, seed):
+    others = sorted(eligible - protected,
+                    key=lambda ident: sha256(f"{seed}:{ident}".encode()).hexdigest())
+    return protected | set(others[:max(0, cap - len(protected))])
+
+
+def sample_recovered_phase(rows, cap, seed):
+    eligible = {row["sample_id"] for row in rows if row["keep"]}
+    protected = {rows[-1]["sample_id"]} | {row["sample_id"] for row in rows
+        if row["keep"] and (row["mutation"] or row["category"] == "xml_related")}
+    selected = cap_decisions(eligible, protected, cap, seed)
+    return selected, {"protected": len(protected), "retained": len(selected), "recovered_phase": True}
 
 
 def sample_phase(rows, effects, cap, seed, eligible=None):
@@ -30,10 +44,7 @@ def sample_phase(rows, effects, cap, seed, eligible=None):
                      or effects[row["sample_id"]]["category"] == "xml_related")
     eligible = {row["sample_id"] for row in rows} if eligible is None else eligible
     protected &= eligible
-    others = sorted((row["sample_id"] for row in rows if row["sample_id"] in eligible
-                     and row["sample_id"] not in protected),
-                    key=lambda ident: sha256(f"{seed}:{ident}".encode()).hexdigest())
-    selected = protected | set(others[:max(0, cap - len(protected))])
+    selected = cap_decisions(eligible, protected, cap, seed)
     return selected, {**guards, "protected": len(protected), "retained": len(selected)}
 
 
@@ -77,21 +88,25 @@ def qualify_episode(rows, processor, effects, cap, seed, output):
         eligible = {row["sample_id"] for row in phase if row["keep"]}
         mutations = [row for row in phase if row["mutation"]]
         mutation_kept = sum(row["keep"] for row in mutations)
-        qualified = terminal["sample_id"] in eligible and 2 * mutation_kept >= len(mutations)
+        qualified = terminal["sample_id"] in eligible
         receipt = {"episode": terminal["episode"], "stage": stage, "split": terminal["split"],
                    "final_components": terminal["final_components"], "decisions": len(members),
                    "terminal_sample_id": terminal["sample_id"], "qualified": qualified,
                    "mutation_decisions": len(mutations), "eligible_mutation_decisions": mutation_kept}
         selected = set()
-        if qualified:
-            if terminal["split"] == "train":
-                selected, guards = sample_phase(members, effects, cap, seed, eligible)
-                receipt.update(guards)
-            else:
-                selected = eligible
+        # Preserve the original sampling; apply the frozen supplement rule only
+        # to phases previously rejected by the mutation-majority condition.
+        if qualified and 2 * mutation_kept < len(mutations):
+            selected, guards = sample_recovered_phase(phase, cap, seed)
+            receipt.update(guards)
+        elif qualified and terminal["split"] == "train":
+            selected, guards = sample_phase(members, effects, cap, seed, eligible)
+            receipt.update(guards)
+        elif qualified:
+            selected = eligible
         receipt["retained"] = len(selected)
         receipts.append(receipt)
-        reason = "long_phase_downsampled" if qualified else "phase_missing_completion_or_mutations"
+        reason = "long_phase_downsampled" if qualified else "phase_missing_completion"
         decisions.extend({**row, "keep": row["sample_id"] in selected,
                           "reason": row["reason"] if not row["keep"] or row["sample_id"] in selected else reason}
                          for row in phase)
@@ -110,18 +125,17 @@ def load_selection(path, rows):
     return decisions
 
 
-def finalize_rows(rows, selection):
+def finalize_rows(rows):
     phases = defaultdict(list)
     for row in rows:
         phases[(row["episode"], row["stage"])].append(row)
     rejected = set()
     for members in phases.values():
         good = {row["sample_id"] for row in members if not row.get("state_rejection")}
-        mutation_ids = {row["sample_id"] for row in members if selection[row["sample_id"]]["mutation"]}
         terminal = max(members, key=lambda row: row["call_id"])["sample_id"]
-        if terminal not in good or 2 * len(good & mutation_ids) < len(mutation_ids):
+        if terminal not in good:
             rejected.update(good)
-    return [{**row, "state_rejection": {"rejection": "phase_missing_completion_or_mutations_after_rewrite",
+    return [{**row, "state_rejection": {"rejection": "phase_missing_completion_after_rewrite",
              "offline_selection_only": True, "policy": POLICY}} if row["sample_id"] in rejected else row for row in rows]
 
 

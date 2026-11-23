@@ -347,7 +347,7 @@ def main():
     if args.selection_plan:
         from .prepare_selection import finalize_rows
 
-        results = finalize_rows(results, args.selection)
+        results = finalize_rows(results)
     with (args.output / "rewritten.jsonl").open("w") as stream:
         stream.writelines(json.dumps(row) + "\n" for row in results)
     atomic(args.output / "completed.json", {**plan, "at": time.time(), "counts": dict(rewriter.counts),
