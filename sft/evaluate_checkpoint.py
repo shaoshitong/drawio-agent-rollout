@@ -35,7 +35,7 @@ def start_model(args):
                "--host", getattr(args, "host", "127.0.0.1"),
                "--port", str(args.port), "--tp", "1", "--dtype", "bfloat16",
                "--context-length", context, "--max-total-tokens", context,
-               "--max-running-requests", "1", "--mem-fraction-static", "0.85",
+               "--max-running-requests", "1", "--mem-fraction-static", str(getattr(args, "mem_fraction_static", 0.85)),
                "--cuda-graph-max-bs", "1", "--max-mamba-cache-size", "16",
                "--sampling-defaults", "model", "--reasoning-parser", "qwen3",
                "--tool-call-parser", "qwen3_coder", "--preferred-sampling-params",
@@ -138,7 +138,7 @@ def reconstruct(args, key):
     protocol["preserve_raw_tool_schema"] = True
     if getattr(args, "causal_context", False):
         protocol.update(generator_context=32768, generator_raw_history_window=config.context_window,
-                        state_prefix_policy="own-state-prefix-v1", generator_auto_compaction=False)
+                        state_prefix_policy="own-state-prefix-v2", generator_auto_compaction=False)
     save(args.out / "protocol.json", protocol)
     generator_session = reviewer_session = None
     context_proxy = context_log = None
