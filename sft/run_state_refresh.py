@@ -1,4 +1,4 @@
-"""Own the TP4 editor lifecycle while refreshing immutable SFT decisions."""
+"""Own the TP4 editor lifecycle for state refreshes and targeted rewrites."""
 
 import argparse
 import json
@@ -22,12 +22,18 @@ def main():
 
     setproctitle('python')
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('root', 'manifest', 'selection-plan', 'state-prefix-model', 'output'):
+    for name in ('root', 'state-prefix-model', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument('--manifest', type=Path)
+    sources.add_argument('--source-manifest', type=Path)
+    parser.add_argument('--selection-plan', type=Path)
     parser.add_argument('--source-commit', required=True)
     parser.add_argument('--port', type=int, default=32527)
     parser.add_argument('--workers', type=int, default=4)
     args = parser.parse_args()
+    if bool(args.manifest) != bool(args.selection_plan):
+        parser.error('--selection-plan is required with --manifest and unavailable with --source-manifest')
     args.output.mkdir(parents=True, exist_ok=False)
     devices = '4,5,6,7'
     inventory = subprocess.check_output(['nvidia-smi', '-i', devices,
@@ -47,8 +53,9 @@ def main():
         'source_commit': args.source_commit, 'inventory_before': inventory, 'training_started': False})
     try:
         ready(server, args.port, timeout=900)
-        command = [sys.executable, '-m', 'sft.refresh_state', '--manifest', str(args.manifest),
-            '--selection-plan', str(args.selection_plan), '--model', str(args.root / 'models/Qwen3.8-27B'),
+        mode = ['sft.rewrite_cot', '--source-manifest', str(args.source_manifest)] if args.source_manifest else [
+            'sft.refresh_state', '--manifest', str(args.manifest), '--selection-plan', str(args.selection_plan)]
+        command = [sys.executable, '-m', *mode, '--model', str(args.root / 'models/Qwen3.8-27B'),
             '--state-prefix-model', str(args.state_prefix_model), '--output', str(args.output / 'data'),
             '--source-commit', args.source_commit, '--workers', str(args.workers),
             '--endpoint', f'http://127.0.0.1:{args.port}/v1/chat/completions']

@@ -277,7 +277,10 @@ def main():
 
     setproctitle("python")
     parser = argparse.ArgumentParser(description=__doc__)
-    for key in ("data", "model", "output"):
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--data", type=Path)
+    sources.add_argument("--source-manifest", type=Path, help="Explicit immutable train-only repair decisions")
+    for key in ("model", "output"):
         parser.add_argument("--" + key, type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
@@ -298,7 +301,17 @@ def main():
     lease.truncate()
     lease.write(str(os.getpid()) + "\n")
     lease.flush()
-    rows = select_rows(args.data)
+    if args.source_manifest:
+        if args.selection_plan or args.sample_decisions:
+            parser.error("--source-manifest already defines the selected repair decisions")
+        rows = load_manifest(args.source_manifest)
+        if not rows or any(row["split"] != "train" or not row["supervision_eligible"] for row in rows):
+            parser.error("--source-manifest requires eligible training decisions")
+        if len({row["sample_id"] for row in rows}) != len(rows):
+            parser.error("--source-manifest cannot contain duplicate decisions")
+        rows.sort(key=lambda row: (row["episode_order"], row["call_id"]))
+    else:
+        rows = select_rows(args.data)
     if args.selection_plan:
         from .prepare_selection import POLICY as selection_policy, load_selection
 
