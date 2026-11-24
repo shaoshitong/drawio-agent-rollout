@@ -114,6 +114,11 @@ def build_patch(
         compaction["auto"] = auto_compaction
     if compaction:
         patch.append({"id": "compaction-basic", "config": compaction})
+    if auto_compaction is False:
+        patch.extend([
+            {"id": "spill-local", "config": {"root": "/session/.dsh/spill"}},
+            {"insert": [{"id": "rollout-tool-results", "name": "file:///integration/tool_result_policy.mjs"}]},
+        ])
     if role == "reviewer":
         patch.extend({"id": name, "disabled": True} for name in ("tool-todo", "plan-mode"))
     patch.extend(

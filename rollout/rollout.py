@@ -268,6 +268,9 @@ def run_turn(args, role, number, session):
             str(HERE / "sandbox_gateway.py"),
             "/integration/sandbox_gateway.py",
             "--ro-bind",
+            str(HERE / "tool_result_policy.mjs"),
+            "/integration/tool_result_policy.mjs",
+            "--ro-bind",
             str(args.python_runtime_root),
             str(args.python_runtime_root),
         )

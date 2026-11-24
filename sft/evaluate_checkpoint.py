@@ -116,7 +116,8 @@ def evaluation_config(args, reviewer_url="", reviewer_auth=None):
         preserve_thinking=getattr(args, "preserve_thinking", False), qwen38_effort="xhigh",
         sampling_preset=getattr(args, "sampling_preset", "precise-coding"), reviewer_sampling_preset="model", seed=42,
         rounds=2, skill_mode="full", single_self_review=True, seeded=False, preserve_tool_schema=True,
-        resume=True, resume_note="", compaction_headroom_tokens=None, no_auto_compaction=causal, turn_timeout=21600)
+        resume=True, resume_note=getattr(args, "resume_note", ""),
+        compaction_headroom_tokens=None, no_auto_compaction=causal, turn_timeout=21600)
 
 
 def reconstruct(args, key):

@@ -104,6 +104,7 @@ def main():
     references.add_argument("--cases", type=Path, help="Frozen cases with reference_png and reference_sha256")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--resume-generator", type=Path)
+    parser.add_argument("--resume-note", default="")
     parser.add_argument("--gpu", default="6")
     parser.add_argument("--editor-gpu", default="7")
     parser.add_argument("--port", type=int, default=32680)
