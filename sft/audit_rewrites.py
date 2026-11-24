@@ -107,6 +107,12 @@ def audit_wire(root, store, rows, readers):
                 sources = [text[len("<tool_response>"):-len("</tool_response>")]
                            if text.startswith("<tool_response>") and text.endswith("</tool_response>") else text
                            for text in sources]
+            elif record.get("reasoning_source"):
+                reference = record["reasoning_source"]
+                previous = open_store(reference["root"]).get(reference["ref"])
+                if any(previous[key] != row[key] for key in ("request_ref", "response_ref")):
+                    raise ValueError("Recompaction source belongs to another decision")
+                sources = [previous["current_reasoning"]]
             else:
                 response = reader.value(row["response_ref"])
                 sources = [response["choices"][0]["message"].get("reasoning_content") or ""]

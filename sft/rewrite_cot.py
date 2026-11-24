@@ -119,6 +119,8 @@ class Rewriter:
         scope = {"sample_id": sample_id, "source_start": part["start"],
                  "source_end": part["end"], "source_sha256": digest(source),
                  "archived_request_ref": request_ref, "previous_sha256": digest(previous)}
+        if part.get("reasoning_source"):
+            scope["reasoning_source"] = part["reasoning_source"]
         if self.count(source) <= 96:
             return source, {**scope, "outcome": "already_short", "attempts": []}
         if not part["boundary_safe"]:
