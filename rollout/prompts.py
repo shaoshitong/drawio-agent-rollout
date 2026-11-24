@@ -1,24 +1,27 @@
 def generation_prompt(n: int, rounds: int = 4) -> str:
-    previous = (
-        f"Start from your own round{n - 1}.drawio and read review{n - 1}.json. "
-        "Check its findings against reference.png, repair the candidate, and preserve correct regions."
-        if n > 1
-        else "Inspect the full reference.png, save an editable draft with the file tools, and render it. "
-        "Use approximate geometry for the draft. Check detailed crops, typography, and edge routes "
-        "against that render and refine the diagram afterward."
-    )
+    if n == 1:
+        task = ("Create a first editable draft from the full reference.png. Save it using the file tools. "
+                "Use the whole image for this draft and leave close-up inspections for the review and revision round.")
+        detail = "Draw the major shapes, readable labels, and connectors with estimated positions and sizes."
+        after_render = "Finish this round as soon as the initial draft renders successfully."
+    else:
+        task = (f"Follow the supplied drawio-reconstruction skill. Start from your own round{n - 1}.drawio "
+                f"and read review{n - 1}.json. "
+                "Check its findings against reference.png, repair the candidate, and preserve correct regions.")
+        detail = ("Match all visible content, positions, dimensions, typography, colors, line styles, "
+                  "edge endpoints, and arrow directions.")
+        after_render = ("Inspect that render globally and locally against the reference and repair "
+                        "visible defects within this round's budget. Rendering success is not fidelity.")
     return f"""You are the Generator for round {n} of {rounds}.
-Follow the supplied drawio-reconstruction skill. {previous}
+{task}
 
 Write round{n}.drawio using native editable Draw.io cells, text, geometry, and
-connectors. Match all visible content, positions, dimensions, typography, colors,
-line styles, edge endpoints, and arrow directions. Do not change reference.png
+connectors. {detail} Do not change reference.png
 or earlier round files. Do not embed screenshots, reference crops, images, data
 URIs, external image assets, or flattened SVGs; crops are for observation only.
 
 Use the supplied official Draw.io renderer to export round{n}.png from the actual
-XML. Inspect that render globally and locally against the reference and repair
-visible defects within this round's budget. Rendering success is not fidelity.
+XML. {after_render}
 
 Use only the reference and your own earlier candidates/reviews. Do not access
 other Draw.io answers, gold XML, gold-aware MCP tools, compiler diffs, comparison

@@ -172,7 +172,7 @@ def run_turn(args, role, number, session):
             prompt += "Reuse your existing image observations. Return the required review JSON directly; do not create a plan, update tasks, or try to save a review file.\n"
     if args.resume_note:
         prompt += "\nHost runtime recovery note: " + args.resume_note + "\n"
-    if role == "generator" and args.single_self_review:
+    if role == "generator" and number > 1 and args.single_self_review:
         prompt += "\nPerform at most one render-and-inspect cycle in this generation stage. Return artifact paths and remaining limitations afterward; the independent Reviewer performs the next review.\n"
     prompt += (
         f"\nWorkspace paths: /case/reference.png; /case/round{number}.drawio; "

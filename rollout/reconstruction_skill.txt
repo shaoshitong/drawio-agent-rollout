@@ -33,9 +33,10 @@ Inputs and boundaries
 
 Reference inventory
 
-Use a brief global inventory with approximate reference-pixel positions to start
-the first editable draft. Complete the detailed inventory while comparing the
-rendered draft with the reference. Check:
+The first round uses the full image to build a renderable editable draft with
+estimated positions. End the round after a successful render. The independent
+reviewer checks the render, then the generator uses the findings to complete the
+inventory and refine the draft in the revision round. Check:
 - canvas extent, background, panels, containers, tables, dividers, and layers;
 - all text, labels, symbols, icons, and repeated objects;
 - every connector, arrowhead, bend, loop, bracket, and dashed path.
@@ -46,8 +47,8 @@ items explicitly. Base the inventory on this reference, not a stock template.
 Generator workflow
 
 1. Inspect reference.png globally and establish the canvas coordinate system.
-   Use estimated positions to start the draft. Inspect dense regions and measure
-   fine details after rendering the draft.
+   In round 1, use estimated positions and proceed directly to the draft and its
+   first render. Inspect dense regions and measure fine details in revision rounds.
 2. Write roundN.drawio as valid native editable Draw.io XML. Use unique cell
    IDs, valid parents, explicit geometry, and properly escaped label text.
    Preserve logical groups, containment, and visible stacking order.
