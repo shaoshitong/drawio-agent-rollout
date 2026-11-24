@@ -45,7 +45,7 @@ def run(args):
         "common_max_tokens": args.max_tokens, "model_path": str(args.model_path),
         "scope": "Same archived messages, images and tools; no target, hints or tool execution. "
                  "Single-decision output limit recorded above; not a full-rollout quality assessment."})
-    server, log = start_model(args)
+    server, log = start_model(args, getattr(args, "serving_python", None))
     results = {}
     try:
         ready(server, args.port, timeout=900)
@@ -87,6 +87,9 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--gpu", required=True)
+    parser.add_argument("--causal-context", action="store_true")
+    parser.add_argument("--serving-python", type=Path)
+    parser.add_argument("--mem-fraction-static", type=float, default=0.85)
     parser.add_argument("--port", type=int, default=32639)
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--conditions", nargs="+", choices=("greedy", "original", "presence15"),
