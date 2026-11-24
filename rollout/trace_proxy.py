@@ -3,14 +3,55 @@
 import argparse
 import base64
 from hashlib import sha256
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import count
 import json
 from pathlib import Path
+from queue import Empty, Queue
 import sys
+from threading import Thread
 import time
 from urllib.parse import urlsplit
+
+
+HEARTBEAT = b": keepalive\n\n"
+
+
+def read_response(response, events):
+    try:
+        while chunk := response.read1(65536):
+            events.put(chunk)
+    except (OSError, HTTPException) as error:
+        events.put(error)
+    finally:
+        events.put(None)
+
+
+def response_chunks(response, interval=15):
+    events = Queue()
+    Thread(target=read_response, args=(response, events), daemon=True).start()
+    pending = b""
+    while True:
+        try:
+            chunk = events.get(timeout=interval)
+        except Empty:
+            yield HEARTBEAT
+            continue
+        if chunk is None:
+            if pending:
+                yield pending
+            return
+        if isinstance(chunk, Exception):
+            raise chunk
+        pending += chunk
+        # Insert comments between complete SSE events, never inside JSON data.
+        boundaries = [index + len(separator) for separator in (b"\n\n", b"\r\n\r\n", b"\r\r")
+                      if (index := pending.rfind(separator)) >= 0]
+        if boundaries:
+            boundary = max(boundaries)
+            yield pending[:boundary]
+            pending = pending[boundary:]
 
 
 def images(value):
@@ -202,25 +243,36 @@ class Proxy(BaseHTTPRequestHandler):
         upstream = HTTPConnection(self.server.upstream.hostname, self.server.upstream.port, timeout=900)
         upstream.request("POST", self.path, body, {"Content-Type": "application/json"})
         response = upstream.getresponse()
+        streaming = response.getheader("Content-Type", "").startswith("text/event-stream")
         self.send_response(response.status)
+        blocked = {"connection", "transfer-encoding", "keep-alive"}
+        if streaming:
+            blocked.add("content-length")
         for key, value in response.getheaders():
-            if key.lower() not in ("connection", "transfer-encoding", "keep-alive"):
+            if key.lower() not in blocked:
                 self.send_header(key, value)
         self.send_header("Connection", "close")
         self.end_headers()
         chunks = []
         stream_error = None
         first_byte_seconds = None
+        heartbeats = 0
         try:
-            while chunk := response.read1(65536):
-                if first_byte_seconds is None:
+            incoming = (response_chunks(response, getattr(self.server, "heartbeat_seconds", 15))
+                        if streaming else iter(lambda: response.read1(65536), b""))
+            for chunk in incoming:
+                heartbeat = streaming and chunk == HEARTBEAT
+                heartbeats += int(heartbeat)
+                if first_byte_seconds is None and not heartbeat:
                     first_byte_seconds = time.time() - record["timestamp"]
                 chunks.append(chunk)
                 if capture:
                     capture.write(chunk)
+                    if heartbeat:
+                        capture.flush()
                 self.wfile.write(chunk)
                 self.wfile.flush()
-        except OSError as error:
+        except (OSError, HTTPException) as error:
             stream_error = type(error).__name__
         finally:
             if capture:
@@ -236,6 +288,7 @@ class Proxy(BaseHTTPRequestHandler):
                             "seconds": round(time.time() - record["timestamp"], 3),
                             "first_byte_seconds": first_byte_seconds,
                             "stream_error": stream_error,
+                            "sse_heartbeats": heartbeats,
                             **response_summary(chunks),
                         }
                     )
