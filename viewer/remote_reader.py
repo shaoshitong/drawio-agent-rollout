@@ -154,6 +154,68 @@ def call_detail(arg):
                 'sampling': {k: request.get(k) for k in ('temperature','top_p','top_k','max_tokens','seed') if k in request}}}
 
 
+def offline_selection():
+    """Choose display examples across the actual 218-update exposure sequence."""
+    rows = {row['sample_id']: row for row in
+            (json.loads(line) for line in MANIFEST.open() if line.strip())}
+    audit = B/'checks/stopped218-supervised-actions-20261124/decisions.jsonl'
+    decisions = [json.loads(line) for line in audit.open() if line.strip()]
+    selected = []
+    for start, end in ((1,50),(51,100),(101,150),(151,200),(201,218)):
+        for category in ('xml_related','crop_related','image_read','other_tool'):
+            match = next((item for item in decisions
+                          if start <= item['exposure']//32+1 <= end
+                          and item.get('category') == category
+                          and item['sample_id'] in rows), None)
+            if match is None:
+                continue
+            row = rows[match['sample_id']]
+            selected.append({
+                'id':'current:'+row['sample_id'], 'sample_id':row['sample_id'],
+                'title':f"U{match['exposure']//32+1} · {category} · 决策 {row.get('decision_order')}",
+                'category':category, 'episode':row['episode'], 'stage':row.get('stage'),
+                'first_seen_step':match['exposure']//32+1,
+                'seen_updates':[match['exposure']//32+1],
+                'training_link_source':'verified_sampler_exposure_divided_by_effective_batch_32',
+                'artifact_effect':match.get('artifact_effect'),
+                'original_tokens':None, 'rewritten_tokens':row.get('completion_tokens'),
+                'split':row.get('split'), 'source':str(MANIFEST),
+                'decision_order':row.get('decision_order'), 'current_curriculum':True,
+                'comparison_kind':'supervision_rewrite',
+            })
+    return {'sft':selected, 'selection':'first observed decision per category per 50-update band; final band201-218'}
+
+
+def offline_batch(args):
+    """Read display text in one SSH query; raw streams and stores stay remote."""
+    pool, by_message = [], {}
+    def intern(messages):
+        result = []
+        for message in messages:
+            key = json.dumps(message, sort_keys=True, ensure_ascii=False)
+            if key not in by_message:
+                by_message[key] = len(pool)
+                pool.append(message)
+            result.append(by_message[key])
+        return result
+    details, errors = [], []
+    for query in args.get('items',[]):
+        try:
+            if query['kind'] == 'sft':
+                detail = sft_detail(query['id'])
+                for name in ('original','rewritten'):
+                    detail[name]['messages'] = intern(detail[name].get('messages',[]))
+            elif query['kind'] == 'call':
+                detail = call_detail(query)
+                detail['request_messages'] = intern(detail.get('request_messages',[]))
+            else:
+                raise ValueError('Unsupported display query')
+            details.append({'key':query['key'], 'detail':detail})
+        except Exception as error:
+            errors.append({'key':query['key'],'error':type(error).__name__,'message':str(error)})
+    return {'details':details,'message_pool':pool,'errors':errors}
+
+
 def main(args):
     kind = args['kind']
     if kind == 'manifest':
@@ -162,6 +224,10 @@ def main(args):
         return sft_detail(args['id'])
     if kind == 'call':
         return call_detail(args)
+    if kind == 'offline_selection':
+        return offline_selection()
+    if kind == 'offline_batch':
+        return offline_batch(args)
     raise ValueError('Unknown read operation')
 
 

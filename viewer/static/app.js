@@ -1,5 +1,6 @@
 'use strict';
 
+const offline = window.DSH_OFFLINE && typeof window.DSH_OFFLINE === 'object' ? window.DSH_OFFLINE : null;
 const initialView = new URLSearchParams(location.search).get('view');
 const state = {
   catalog: null, view: ['sft', 'rollout', 'training'].includes(initialView) ? initialView : 'sft', query: '', checkpoint: 'all', sample: null,
@@ -58,7 +59,46 @@ function plainContent(value) {
     return stringify(part);
   }).join('\n');
 }
+function copied(value) { return JSON.parse(JSON.stringify(value)); }
+function hasOwn(object, key) { return object != null && Object.prototype.hasOwnProperty.call(object, key); }
+function offlineDetail(value) {
+  const data = copied(value);
+  const messages = values => values.map(message => {
+    if (!Number.isInteger(message)) return message;
+    if (!hasOwn(offline.message_pool, message)) throw new Error(`离线包未包含上下文消息 #${message}。`);
+    return copied(offline.message_pool[message]);
+  });
+  for (const side of [data.original, data.rewritten]) if (Array.isArray(side?.messages)) side.messages = messages(side.messages);
+  if (Array.isArray(data.request_messages)) data.request_messages = messages(data.request_messages);
+  return data;
+}
 async function request(path) {
+  if (offline) {
+    const url = new URL(path, 'https://offline.invalid');
+    if (url.pathname === '/api/catalog') {
+      if (!offline.catalog) throw new Error('离线包未包含轨迹索引。');
+      const catalog = copied(offline.catalog);
+      catalog.sft = (catalog.sft || []).filter(row => hasOwn(offline.sft, idOf(row)));
+      return catalog;
+    }
+    if (url.pathname === '/api/sft') {
+      const id = url.searchParams.get('id');
+      if (!hasOwn(offline.sft, id)) throw new Error(`此 SFT 配对未打包：${id}。离线文件不会连接远端。`);
+      return offlineDetail(offline.sft[id]);
+    }
+    if (url.pathname === '/api/sft-index') {
+      const episode = url.searchParams.get('episode');
+      const rows = (offline.catalog?.sft || []).filter(row => row.current_curriculum && row.episode === episode && hasOwn(offline.sft, idOf(row)));
+      if (!rows.length) throw new Error(`此 episode 的决策未打包：${episode}。`);
+      return {sft: copied(rows)};
+    }
+    if (url.pathname === '/api/call') {
+      const run = url.searchParams.get('run'), call = url.searchParams.get('call');
+      if (!hasOwn(offline.calls?.[run], call)) throw new Error(`此调用的详情未打包：${run} / ${call}。现有摘要仍可浏览。`);
+      return offlineDetail(offline.calls[run][call]);
+    }
+    throw new Error('此资源未打包到离线文件。');
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 120000);
   try {
@@ -74,6 +114,60 @@ async function request(path) {
     if (error.name === 'AbortError') throw new Error('读取超时。远端原始记录可能暂不可用，可以稍后重试。');
     throw error;
   } finally { clearTimeout(timer); }
+}
+function resolveImage(url) {
+  if (typeof url !== 'string') return '';
+  if (url.startsWith('data:image/')) return url;
+  if (!url.startsWith('/api/')) return '';
+  if (!offline) return url;
+  const embedded = offline.images?.[url];
+  return typeof embedded === 'string' && embedded.startsWith('data:image/') ? embedded : '';
+}
+function imageDialog(url, title) {
+  const source = resolveImage(url);
+  if (!source) return;
+  const previous = document.activeElement;
+  const dialog = el('dialog', 'image-dialog');
+  dialog.setAttribute('aria-label', title);
+  const close = () => { if (dialog.open && typeof dialog.close === 'function') dialog.close(); else dialog.remove(); };
+  const toolbar = el('div', 'image-dialog-toolbar');
+  append(toolbar, el('strong', '', title), button('关闭 ×', close));
+  const image = el('img'); image.src = source; image.alt = title;
+  append(dialog, toolbar, image);
+  dialog.addEventListener('close', () => {dialog.remove(); previous?.focus();}, {once:true});
+  dialog.addEventListener('click', event => {if (event.target === dialog) close();});
+  document.body.append(dialog);
+  if (typeof dialog.showModal === 'function') dialog.showModal();
+  else {dialog.setAttribute('open', ''); toolbar.querySelector('button').focus();}
+}
+function snapshotTime(value) {
+  if (value == null || value === '') return '未记录';
+  const time = new Date(typeof value === 'number' ? value * 1000 : value);
+  return Number.isNaN(time.getTime()) ? '未记录' : `${time.toLocaleString('zh-CN', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Shanghai'})} UTC+8`;
+}
+function renderOfflineHeader() {
+  if (!offline) return;
+  document.body.classList.add('offline-mode');
+  document.title = 'Trajectory Lab · 离线快照';
+  $('#refresh').textContent = '重置视图 ↺';
+  const header = $('.app-header');
+  let summary = $('#offline-summary');
+  if (!summary) {summary = el('div', 'offline-summary'); summary.id = 'offline-summary'; header.after(summary);}
+  clear(summary);
+  const coverage = offline.coverage || {}, catalog = state.catalog || {};
+  const pairs = Object.keys(offline.sft || {}).length;
+  const current = (catalog.sft || []).filter(row => row.current_curriculum).length;
+  const historical = (catalog.sft || []).filter(row => !row.current_curriculum).length;
+  const counts = `SFT 配对 ${number(coverage.sft_pairs ?? pairs)}（当前 ${number(coverage.current_pairs ?? current)} / 历史 ${number(coverage.historical_pairs ?? historical)}）`;
+  const calls = [];
+  if (coverage.captured_calls != null) calls.push(`调用捕获 ${number(coverage.captured_calls)} 份`);
+  if (coverage.unique_captures != null) calls.push(`独立捕获 ${number(coverage.unique_captures)} 份`);
+  calls.push(`已打包调用详情 ${number(coverage.full_call_outputs)} 份`, `仅摘要 ${number(coverage.summary_calls)} 份`, `带输入上下文 ${number(coverage.request_contexts)} 份`);
+  if (coverage.incomplete_streams != null) calls.push(`流未完整结束 ${number(coverage.incomplete_streams)} 份`);
+  if (coverage.loss_points != null) calls.push(`loss ${number(coverage.loss_points)} 点`);
+  append(summary, badge('离线快照'), el('span', '', `导出 ${snapshotTime(offline.exported_at)}`), el('span', 'offline-coverage', `${counts} · ${calls.join(' · ')}`));
+  const dataset = catalog.meta?.dataset;
+  if (dataset?.total_decisions != null) summary.append(el('span', 'offline-source-note', `源数据总量 ${number(dataset.total_decisions)} 决策 / ${number(dataset.total_episodes)} episodes；本文件只含上述已打包内容。捕获副本不计为新增实验。`));
 }
 function notice(text, tone = '') { return el('div', `notice ${tone}`, text); }
 function loading(text = '正在读取真实轨迹…') { return append(el('div', 'loading-state'), el('span', 'spinner'), document.createTextNode(text)); }
@@ -266,9 +360,16 @@ async function showSft() {
     if (Array.isArray(data.images) && data.images.length) {
       const images = el('div', 'image-strip');
       for (const image of data.images) {
-        if (!image.url || !image.url.startsWith('/api/')) continue;
-        const figure = el('figure'); const node = el('img'); node.src = image.url; node.alt = image.title || '轨迹图片'; node.loading = 'lazy';
-        append(figure, node, el('figcaption', '', image.title || '轨迹图片')); images.append(figure);
+        const url = resolveImage(image.url), title = image.title || '轨迹图片';
+        const figure = el('figure');
+        if (url) {
+          const node = el('img'); node.src = url; node.alt = title; node.loading = 'lazy';
+          const link = el('a'); link.href = url; link.setAttribute('aria-label', `放大查看${title}`);
+          link.addEventListener('click', event => {event.preventDefault(); imageDialog(url, title);});
+          link.append(node); figure.append(link);
+        } else if (offline) figure.append(el('p', 'small-note', '此图片未打包'));
+        else continue;
+        figure.append(el('figcaption', '', title)); images.append(figure);
       }
       content.append(images);
     }
@@ -397,11 +498,15 @@ function runPane(run, side) {
     const imageStrip = el('div', 'image-strip');
     for (const [kind, title] of [['reference', '输入参考图'], ['round1', '第一轮渲染'], ['round2', '第二轮渲染']]) {
       if (!run.artifacts[kind]) continue;
-      const figure = el('figure'); const url = `/api/run-image?run=${encodeURIComponent(idOf(run))}&kind=${kind}`;
-      const image = el('img'); image.src = url; image.alt = title; image.loading = 'lazy';
-      image.addEventListener('error', () => { image.hidden = true; figure.prepend(el('p', 'small-note', '图片读取不可用')); });
-      const link = el('a'); link.href = url; link.target = '_blank'; link.rel = 'noopener'; link.setAttribute('aria-label', `查看${title}`); link.append(image);
-      append(figure, link, el('figcaption', '', title)); imageStrip.append(figure);
+      const figure = el('figure'); const url = resolveImage(`/api/run-image?run=${encodeURIComponent(idOf(run))}&kind=${kind}`);
+      if (url) {
+        const image = el('img'); image.src = url; image.alt = title; image.loading = 'lazy';
+        image.addEventListener('error', () => { image.hidden = true; figure.prepend(el('p', 'small-note', '图片读取不可用')); });
+        const link = el('a'); link.href = url; link.setAttribute('aria-label', `放大查看${title}`);
+        link.addEventListener('click', event => {event.preventDefault(); imageDialog(url, title);});
+        link.append(image); figure.append(link);
+      } else figure.append(el('p', 'small-note', '此图片未打包'));
+      figure.append(el('figcaption', '', title)); imageStrip.append(figure);
     }
     if (imageStrip.childNodes.length) body.append(imageStrip);
   }
@@ -527,7 +632,11 @@ function showTraining() {
   });
   table.append(tbody);content.append(table);
   const notes=el('ul','note-list');
-  for(const note of meta.notes || []) notes.append(el('li','',typeof note==='string'?note:stringify(note)));
+  for(const note of meta.notes || []) {
+    let text = typeof note === 'string' ? note : stringify(note);
+    if (offline && text.includes('页面首批索引')) text = `${text.split('，页面首批索引')[0]}；本文件的收录范围见顶部离线覆盖说明。`;
+    notes.append(el('li','',text));
+  }
   if(notes.childNodes.length)content.append(notes);
   content.append(sourceDetails(meta.provenance || meta.sources || meta.training_source));
 }
@@ -547,13 +656,24 @@ async function loadCatalog() {
     $('#sft-count').textContent=number((state.catalog.sft || []).length);
     $('#run-count').textContent=number((state.catalog.runs || []).length);
     const timestamp=state.catalog.meta?.catalog_source_time || state.catalog.meta?.generated_at;
-    if(timestamp){const time=typeof timestamp==='number'?timestamp*1000:timestamp;$('#snapshot-time').textContent=`证据快照 ${new Date(time).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',timeZone:'Asia/Shanghai'})} UTC+8`;}
+    if(timestamp) $('#snapshot-time').textContent=`${offline ? '离线证据快照' : '证据快照'} ${snapshotTime(timestamp)}`;
+    else if (offline) $('#snapshot-time').textContent = '离线证据快照 · 来源时间未记录';
     $('#training-state').textContent=`${state.catalog.meta?.training_state || '已归档'} · ${number(state.catalog.meta?.training_steps)} updates`;
     const episodeSelect = clear($('#episode-filter'));
-    episodeSelect.add(new Option('首批已载入 · 4 个完整 episodes', 'loaded'));
-    episodeSelect.add(new Option('仅历史 10 条导出', 'historical'));
-    for (const episode of state.catalog.meta?.dataset?.episodes || []) episodeSelect.add(new Option(`${episode.id.slice(0, 12)} · ${episode.count} 决策 · ${episode.split}`, episode.id));
+    if (offline) {
+      episodeSelect.add(new Option(`本文件全部 · ${(state.catalog.sft || []).length} 个配对`, 'loaded'));
+      const historical = (state.catalog.sft || []).filter(row => !row.current_curriculum);
+      if (historical.length) episodeSelect.add(new Option(`历史导出 · 已打包 ${historical.length} 个配对`, 'historical'));
+      const episodes = new Map();
+      for (const row of state.catalog.sft || []) if (row.current_curriculum && row.episode) episodes.set(row.episode, (episodes.get(row.episode) || 0) + 1);
+      for (const [id, count] of episodes) episodeSelect.add(new Option(`${id.slice(0, 12)} · 已打包 ${count} 决策`, id));
+    } else {
+      episodeSelect.add(new Option('首批已载入 · 4 个完整 episodes', 'loaded'));
+      episodeSelect.add(new Option('仅历史 10 条导出', 'historical'));
+      for (const episode of state.catalog.meta?.dataset?.episodes || []) episodeSelect.add(new Option(`${episode.id.slice(0, 12)} · ${episode.count} 决策 · ${episode.split}`, episode.id));
+    }
     state.episode = 'loaded';
+    renderOfflineHeader();
     state.detailCache.clear(); showView();
   } catch(problem){clear(content);error.textContent=`索引读取失败 · ${problem.message}`;error.hidden=false;content.append(button('重新读取',loadCatalog));}
   finally{refresh.disabled=false;}
@@ -568,7 +688,7 @@ $('#episode-filter').addEventListener('change', async event => {
     state.sample = idOf((state.catalog.sft || []).find(row => !row.current_curriculum) || {});
     renderSidebar(); showSft(); return;
   }
-  clear(content).append(loading('载入此 episode 的全部决策…'));
+  clear(content).append(loading(offline ? '载入此 episode 已打包的决策…' : '载入此 episode 的全部决策…'));
   event.target.disabled = true;
   try {
     const data = await request(`/api/sft-index?episode=${encodeURIComponent(selected)}`);
@@ -580,7 +700,14 @@ $('#episode-filter').addEventListener('change', async event => {
   } catch(error) { clear(content).append(notice(`Episode 读取失败 · ${error.message}`, 'error')); }
   finally { event.target.disabled = false; }
 });
-$('#refresh').addEventListener('click',loadCatalog);
+$('#refresh').addEventListener('click', () => {
+  if (offline) {
+    state.view = 'sft'; state.query = ''; state.checkpoint = 'all'; state.sample = null;
+    state.left = null; state.right = null; state.metric = 'turns'; state.diff = false;
+    state.expanded.clear(); $('#search').value = '';
+  }
+  loadCatalog();
+});
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer); resizeTimer=setTimeout(() => { if (state.view==='training' && state.catalog) showTraining(); },120);
