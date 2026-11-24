@@ -136,9 +136,12 @@ def main():
     try:
         references = load_references(args)
         save(args.out / "references.json", {"references": references})
+        editor_environment = environment(args.root)
+        # Shared TP ranks still allocate using the minimum free memory.
+        editor_environment["SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK"] = "0"
         editor = start_server(args.root, args.out / "editor", "generator", "Qwen3.8-27B",
             args.editor_gpu, args.editor_port, 262144, args.editor_fraction,
-            environment(args.root), sampling="qwen38")
+            editor_environment, sampling="qwen38")
         services.append(editor)
         ready(editor[0], args.editor_port, timeout=900)
         serving = copy(args)
