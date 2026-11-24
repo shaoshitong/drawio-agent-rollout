@@ -38,6 +38,7 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--port", type=int, default=32697)
+    parser.add_argument("--fresh", action="store_true", help="Use only the verified training reference")
     args = parser.parse_args()
     receipt = verify_seed(args.build_seed)
     key = sys.stdin.readline().strip()
@@ -50,11 +51,14 @@ def main():
         raise RuntimeError("TP4 requires at least 48 GiB free on each authorized GPU")
     args.out.mkdir(parents=True)
     args.reference = args.build_seed / "case/reference.png"
+    if args.fresh:
+        args.build_seed = None
     args.model_path = args.root / "models/Qwen3.8-27B"
     args.generator_model, args.sampling_preset = "Qwen/Qwen3.8-27B", "qwen38"
     args.causal_context = True
     args.preprocessor_python = Path(sys.executable)
-    args.deployment = "TP4 Qwen3.8 teacher with inherited pre-construction observations"
+    args.deployment = "TP4 Qwen3.8 teacher from reference only" if args.fresh else (
+        "TP4 Qwen3.8 teacher with inherited pre-construction observations")
     env = environment(args.root)
     env.update(SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK="0", DSH_MATCH_TRAINING_IMAGES="1")
     signal.signal(signal.SIGTERM, terminate)
@@ -62,7 +66,8 @@ def main():
     server, log = start_server(args.root, args.out / "teacher", "generator", "Qwen3.8-27B",
         devices, args.port, 32768, .25, env, sampling=args.sampling_preset, preserve_tool_schema=True)
     save(args.out / "launch.json", {"at": time.time(), "pid": os.getpid(), "server_pid": server.pid,
-        "seed_id": receipt["seed_id"], "devices": devices, "source_commit": args.source_commit,
+        "seed_id": receipt["seed_id"], "inherited_observations": not args.fresh,
+        "devices": devices, "source_commit": args.source_commit,
         "supervision_admitted": False, "training_started": False})
     try:
         ready(server, args.port, timeout=900)

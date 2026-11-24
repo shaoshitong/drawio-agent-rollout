@@ -33,8 +33,9 @@ Inputs and boundaries
 
 Reference inventory
 
-Before constructing the first candidate, enumerate visible elements in working
-notes, with stable IDs and approximate reference-pixel bounding boxes:
+Use a brief global inventory with approximate reference-pixel positions to start
+the first editable draft. Complete the detailed inventory while comparing the
+rendered draft with the reference. Check:
 - canvas extent, background, panels, containers, tables, dividers, and layers;
 - all text, labels, symbols, icons, and repeated objects;
 - every connector, arrowhead, bend, loop, bracket, and dashed path.
@@ -44,8 +45,9 @@ items explicitly. Base the inventory on this reference, not a stock template.
 
 Generator workflow
 
-1. Inspect reference.png globally and inspect dense regions at readable scale.
-   Establish the canvas coordinate system, spacing, alignments, and inventory.
+1. Inspect reference.png globally and establish the canvas coordinate system.
+   Use estimated positions to start the draft. Inspect dense regions and measure
+   fine details after rendering the draft.
 2. Write roundN.drawio as valid native editable Draw.io XML. Use unique cell
    IDs, valid parents, explicit geometry, and properly escaped label text.
    Preserve logical groups, containment, and visible stacking order.

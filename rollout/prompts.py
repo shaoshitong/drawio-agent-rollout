@@ -3,7 +3,9 @@ def generation_prompt(n: int, rounds: int = 4) -> str:
         f"Start from your own round{n - 1}.drawio and read review{n - 1}.json. "
         "Check its findings against reference.png, repair the candidate, and preserve correct regions."
         if n > 1
-        else "Inspect reference.png and make a complete visible-element inventory before constructing the candidate."
+        else "Inspect the full reference.png, save an editable draft with the file tools, and render it. "
+        "Use approximate geometry for the draft. Check detailed crops, typography, and edge routes "
+        "against that render and refine the diagram afterward."
     )
     return f"""You are the Generator for round {n} of {rounds}.
 Follow the supplied drawio-reconstruction skill. {previous}
