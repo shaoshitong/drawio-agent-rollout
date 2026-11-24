@@ -155,6 +155,14 @@ function renderOfflineHeader() {
   if (!summary) {summary = el('div', 'offline-summary'); summary.id = 'offline-summary'; header.after(summary);}
   clear(summary);
   const coverage = offline.coverage || {}, catalog = state.catalog || {};
+  if(state.view==='analysis' && offline.analysis){
+    const runs=offline.analysis.runs || [];
+    const selected=runs.filter(run=>run.case_id===offline.analysis.meta?.default_case);
+    append(summary,badge('离线快照'),el('span','',`导出 ${snapshotTime(offline.analysis.meta?.exported_at)}`),
+      el('span','offline-coverage',`同图对照 · ${selected.map(run=>`${run.label} ${run.rows.length} 条`).join(' · ')}`),
+      el('span','offline-source-note','累计此前完整模型输出；本轮输入实际保留的历史另列。教师为 DeepSeek Flash 轨迹，Thinking 由 Qwen 27B 重写。'));
+    return;
+  }
   const pairs = Object.keys(offline.sft || {}).length;
   const current = (catalog.sft || []).filter(row => row.current_curriculum).length;
   const historical = (catalog.sft || []).filter(row => !row.current_curriculum).length;
@@ -668,6 +676,7 @@ function showTraining() {
 }
 function showView() {
   document.body.classList.toggle('analysis-view',state.view==='analysis');
+  renderOfflineHeader();
   for(const tab of document.querySelectorAll('[data-view]')){
     const active=tab.dataset.view===state.view;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));
   }

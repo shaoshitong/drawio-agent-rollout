@@ -12,7 +12,7 @@
   const metricTips = {past_output:'本次之前完整轨迹中的 Assistant 正文＋工具名与参数 tokens；不是当前上下文保留窗口。',past_thinking:'本次之前完整轨迹中的模型 Thinking tokens，包括后来从输入移除的历史推理。',past_tools:'本次之前完整轨迹中的工具调用个数；单位为次数，不是tokens。',thinking:'本次目标或模型回复的 Thinking tokens；中断时只计捕获到的部分。',output:'本次正文＋工具名与参数 tokens；不包括Thinking和后续工具返回。'};
   const groups = [
     ['base', '原始 9B', '原始模型在 DSH 中的实际输出'],
-    ['sft', 'SFT 格式教师', 'DeepSeek 轨迹 · Qwen 27B 重写'],
+    ['sft', 'SFT 教师 · DeepSeek Flash', 'Thinking 由 Qwen 27B 重写'],
     ['trained', 'SFT 后 9B', '160 / 170 / 200 步的实际 rollout'],
   ];
   const roleLabels = {system:'系统', user:'用户 / 状态输入', assistant:'历史 Assistant', tool:'工具结果'};
