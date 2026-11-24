@@ -105,7 +105,7 @@ def catalog():
                  '当前冻结清单21103决策/200 episodes，页面首批索引4个完整episodes；历史10条导出单列。',
                  '151份旧捕获含36份恢复副本，对应115个独立捕获，不按151次独立实验统计。',
                  '历史不同版本的前缀策略、恢复与采样条件可能不同，配对时请核对来源。'],
-        'requested_comparison':{'available':False,'reason':'尚无训练9B/原始9B和原始9B/原始9B的真实配对。已有协议中的reviewer是DeepSeek Flash。'},
+        'requested_comparison':{'available':True,'reviewer':'deepseek-flash','scope':'原始9B与训练后9B的已有同图记录，固定DeepSeek Flash评审。历史基座为汇总覆盖，状态策略差异另行提示。'},
         'dataset':{k:v for k,v in index.items() if k!='sft'},'loss':training.get('loss',[]),
         'training_source':training.get('source'),
         'source_thread':'01a1f4b7-1c87-7ac1-bb82-4e5a1a5bee68'},

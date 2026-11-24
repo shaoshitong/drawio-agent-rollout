@@ -1,7 +1,8 @@
 'use strict';
 
+const initialView = new URLSearchParams(location.search).get('view');
 const state = {
-  catalog: null, view: 'sft', query: '', checkpoint: 'all', sample: null,
+  catalog: null, view: ['sft', 'rollout', 'training'].includes(initialView) ? initialView : 'sft', query: '', checkpoint: 'all', sample: null,
   left: null, right: null, metric: 'turns', diff: false, episode: 'loaded',
   requestSerial: 0, detailCache: new Map(), expanded: new Set(),
 };

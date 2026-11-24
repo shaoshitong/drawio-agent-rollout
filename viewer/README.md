@@ -18,6 +18,6 @@ python3 refresh_index.py
 
 Set `DSH_EVIDENCE_WORKSPACE`, `DSH_EVIDENCE_SSH`, and `DSH_EVIDENCE_SOCKET` to override the existing task's audit root and SSH transport. The historical ten-sample adapter reads the previously exported `sft-forward-compare/samples.json.gz` in place. Full raw records and model weights remain in remote storage. The viewer holds bounded requested detail in memory.
 
-The data sources are intentionally separate. A supervision rewrite is a stored teacher decision, not a checkpoint's autonomous output. A resumed capture can duplicate an earlier capture. Old base rollouts with only aggregate evidence are shown as aggregates, with no invented per-call timeline. Existing rollout protocols identify DeepSeek Flash as reviewer. The requested base-Qwen9B reviewer experiment must have real paired captures before it can appear as an observed comparison.
+The data sources are intentionally separate. A supervision rewrite is a stored teacher decision, not a checkpoint's autonomous output. A resumed capture can duplicate an earlier capture. Old base rollouts with only aggregate evidence are shown as aggregates, with no invented per-call timeline. Existing rollout protocols identify DeepSeek Flash as reviewer. The user selected DeepSeek Flash for both reviewers. The existing comparison uses the same reference image but different historical context policies. Reviewer identity and aggregate-only coverage are displayed explicitly.
 
 Only code and this README are versioned. Local indices, audit files, images, and trajectories are excluded.
