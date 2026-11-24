@@ -133,7 +133,18 @@ def evaluation_config(args, reviewer_url="", reviewer_auth=None):
 
 def reconstruct(args, key):
     previous = getattr(args, "resume_generator", None)
-    if previous:
+    draft_source = getattr(args, "verified_draft_from", None)
+    draft_proof = None
+    if draft_source:
+        from sft.stage_local_rollout import verified_draft
+
+        xml, draft_proof = verified_draft(draft_source, sha256(args.reference.read_bytes()).hexdigest())
+        if Path(draft_proof["model_path"]).resolve() != args.model_path.resolve():
+            raise ValueError("The draft and revision must use the same model")
+        case = prepare_case(args)
+        (case / "round1.drawio").write_bytes(xml)
+        save(args.out / "verified-draft.json", draft_proof)
+    elif previous:
         shutil.copytree(previous, args.out, dirs_exist_ok=True, symlinks=True)
         # A previous host interruption is evidence, not a latch for this new attempt.
         interrupted = args.out / "host-loop-outcome.json"
@@ -176,6 +187,8 @@ def reconstruct(args, key):
     if previous:
         protocol["resumed_generator_from"] = str(previous)
         protocol["neutral_resume"] = config.neutral_resume
+    if draft_proof:
+        protocol["verified_draft_handoff"] = draft_proof
     if getattr(args, "build_seed", None):
         protocol["inherited_observations_sha256"] = sha256((args.build_seed / "past.json").read_bytes()).hexdigest()
     save(args.out / "protocol.json", protocol)
@@ -187,7 +200,8 @@ def reconstruct(args, key):
         for number in (1, 2):
             if getattr(args, "generator_service", None):
                 args.generator_service.stage = number
-            generator_session, _ = run_generation(config, number, generator_session)
+            if number != 1 or not draft_proof:
+                generator_session, _ = run_generation(config, number, generator_session)
             xml = case / f"round{number}.drawio"
             validity = validate_xml(xml)
             metadata = render(xml, case / f"round{number}.png", config.render_runtime)
@@ -230,7 +244,10 @@ def main():
     parser.add_argument("--editor-model", type=Path)
     parser.add_argument("--editor-endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     parser.add_argument("--preprocessor-python", type=Path)
+    parser.add_argument("--verified-draft-from", type=Path, help="Review and revise an archived native write")
     args = parser.parse_args()
+    if args.verified_draft_from and not args.causal_context:
+        parser.error("--verified-draft-from requires the shared causal context")
     args.root, args.out = args.root.absolute(), args.out.absolute()
     args.model_path, args.reference = args.model_path.resolve(), args.reference.resolve()
     key = sys.stdin.readline().strip()
