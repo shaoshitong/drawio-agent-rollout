@@ -9,6 +9,7 @@ from pathlib import Path
 import secrets
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -131,6 +132,40 @@ def evaluation_config(args, reviewer_url="", reviewer_auth=None):
         compaction_headroom_tokens=None, no_auto_compaction=causal, turn_timeout=21600)
 
 
+def verified_review(run, render1, reference_sha256):
+    from sft.check_prefix_chains import Reader
+
+    expected = {"reference.png": reference_sha256, "round1.drawio": render1["source_sha256"],
+                "round1.png": render1["png_sha256"]}
+    archive = run / "reviewer-archive"
+    with sqlite3.connect((archive / "ledger.sqlite").resolve().as_uri() + "?mode=ro", uri=True) as db:
+        call = db.execute(
+            "select id, request, response, artifacts from calls where role='reviewer' and stage=1 "
+            "and completed=1 and status=200 and error is null order by id desc limit 1").fetchone()
+    if call is None:
+        raise ValueError("No completed review request")
+    number, request, response, artifacts = call
+    reader = Reader(archive)
+    inputs = reader.value(request)
+    images = {part["image_url"]["url"][2] for message in inputs["messages"]
+              for part in (message["content"] if isinstance(message.get("content"), list) else [])
+              if part.get("type") == "image_url" and isinstance(part["image_url"]["url"], tuple)}
+    snapshot = reader.value(artifacts)
+    choice, = reader.value(response)["choices"]
+    if (inputs["model"] != "deepseek-flash" or choice["finish_reason"] != "stop"
+            or not {expected["reference.png"], expected["round1.png"]} <= images
+            or any(snapshot.get(name) != digest for name, digest in expected.items())):
+        raise ValueError("Review belongs to a different reference, draft or render")
+    review = review_payload(choice["message"])
+    saved = (run / "case/review1.json").read_bytes()
+    session = json.loads((run / "reviewer/round1/status.json").read_bytes())
+    if not session["completed"] or review != json.loads(saved):
+        raise ValueError("Saved review differs from the completed reviewer response")
+    return saved, {"source": str(run.resolve()), "call": number, "response": response,
+                   "review_sha256": sha256(saved).hexdigest(), "session": session["session_id"],
+                   "inputs": expected}
+
+
 def reconstruct(args, key):
     previous = getattr(args, "resume_generator", None)
     draft_source = getattr(args, "verified_draft_from", None)
@@ -156,13 +191,18 @@ def reconstruct(args, key):
         shutil.copytree(args.build_seed / "case", case)
     else:
         case = prepare_case(args)
-    store = Store(args.out / "reviewer-archive")
-    token = secrets.token_urlsafe(32)
-    auth = args.out / "reviewer-auth.json"
-    with os.fdopen(os.open(auth, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
-        json.dump({"headers": {"Authorization": "Bearer " + token}}, stream)
-    reviewer = gateway(store, Provider(key), args.out.name, "reviewer", case, token, 12, 12)
-    config = evaluation_config(args, f"http://127.0.0.1:{reviewer.server_port}/v1", auth)
+    review_source = getattr(args, "verified_review_from", None)
+    reviewer = None
+    config = evaluation_config(args)
+    if review_source is None:
+        store = Store(args.out / "reviewer-archive")
+        token = secrets.token_urlsafe(32)
+        auth = args.out / "reviewer-auth.json"
+        with os.fdopen(os.open(auth, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
+            json.dump({"headers": {"Authorization": "Bearer " + token}}, stream)
+        reviewer = gateway(store, Provider(key), args.out.name, "reviewer", case, token, 12, 12)
+        config.reviewer_url = f"http://127.0.0.1:{reviewer.server_port}/v1"
+        config.reviewer_auth_file = auth
     protocol = {"source_commit": args.source_commit, "model_path": str(args.model_path),
         "generator": config.generator_model, "reviewer": config.reviewer_model,
         "generator_context": config.context_window, "generator_max_output": config.max_tokens,
@@ -174,7 +214,7 @@ def reconstruct(args, key):
         "gold_available": False, "gold_feedback": False, "mcp": False,
         "reference_sha256": sha256(args.reference.read_bytes()).hexdigest(),
         "deployment": getattr(args, "deployment", "Checkpoint served in BF16; numerical PEFT/export parity not yet certified"),
-        "reviewer_matches_teacher_model": True, "reviewer_budget_cny": 12}
+        "reviewer_matches_teacher_model": True, "reviewer_budget_cny": 0 if review_source else 12}
     protocol["thinking_loop_recovery"] = getattr(args, "recover_thinking_loop", False)
     protocol["build_after_tools"] = getattr(args, "build_after_tools", 0)
     protocol["preserve_raw_tool_schema"] = True
@@ -207,24 +247,31 @@ def reconstruct(args, key):
             metadata = render(xml, case / f"round{number}.png", config.render_runtime)
             save(args.out / f"render{number}.json", {**validity, **metadata})
             save(args.out / "progress.json", {"generation": number, "at": time.time(), **validity})
-            if number == 1:
+            if number == 1 and review_source:
+                reviewed, proof = verified_review(review_source, metadata, protocol["reference_sha256"])
+                (case / "review1.json").write_bytes(reviewed)
+                reviewer_session = proof["session"]
+                save(args.out / "verified-review.json", proof)
+            elif number == 1:
                 digest = sha256(xml.read_bytes()).hexdigest()
                 reviewer.stage = number
                 reviewer_session, event = run_review(config, number, reviewer_session)
                 save(case / "review1.json", review_payload(event))
                 if sha256(xml.read_bytes()).hexdigest() != digest:
                     raise RuntimeError("Reviewer changed the candidate")
+        cost = store.summary() if reviewer else {"calls": 0, "completed_calls": 0, "cost_upper_cny": 0}
         result = {"completed": True, "at": time.time(), "generator_session": generator_session,
                   "reviewer_session": reviewer_session, "fidelity_verified": False,
-                  "candidate": str(case / "round2.drawio"), "reviewer_cost": store.summary()}
+                  "candidate": str(case / "round2.drawio"), "reviewer_cost": cost}
         save(args.out / "completed.json", result)
         print(json.dumps(result), flush=True)
     finally:
         if context_proxy:
             stop_model(context_proxy, context_log)
-        reviewer.shutdown()
-        reviewer.server_close()
-        auth.unlink(missing_ok=True)
+        if reviewer:
+            reviewer.shutdown()
+            reviewer.server_close()
+            auth.unlink(missing_ok=True)
 
 
 def main():

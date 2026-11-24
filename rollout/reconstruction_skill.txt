@@ -48,7 +48,8 @@ Generator workflow
 
 1. Inspect reference.png globally and establish the canvas coordinate system.
    In round 1, use estimated positions and proceed directly to the draft and its
-   first render. Inspect dense regions and measure fine details in revision rounds.
+   first render. In revision rounds, apply concrete review findings before
+   measuring additional regions.
 2. Write roundN.drawio as valid native editable Draw.io XML. Use unique cell
    IDs, valid parents, explicit geometry, and properly escaped label text.
    Preserve logical groups, containment, and visible stacking order.
@@ -65,9 +66,10 @@ Generator workflow
    locally. Revisit each inventory item, especially small labels, edge endpoints,
    line direction, colors, clipping, and container boundaries. A pixel metric
    alone cannot establish structural or visual correctness.
-7. Later rounds begin from round(N-1).drawio and review(N-1).json. Verify the
-   review against the reference, repair concrete defects, preserve correct
-   regions, and re-render. Keep all earlier candidates and renders unchanged.
+7. Later rounds begin from round(N-1).drawio and review(N-1).json. Use the
+   provided images and review to fix clear defects in the existing draft and
+   save roundN.drawio. Re-render and inspect the changed regions. Keep all
+   earlier candidates and renders unchanged.
 8. End the round with candidate/render paths and concise remaining limitations.
    Do not self-certify PASS. Finish the authorized bounded round even when the
    image remains imperfect; do not start unbounded repairs or extra agents.

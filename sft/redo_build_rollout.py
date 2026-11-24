@@ -40,10 +40,13 @@ def main():
     parser.add_argument("--port", type=int, default=32697)
     parser.add_argument("--fresh", action="store_true", help="Use only the verified training reference")
     parser.add_argument("--verified-draft-from", type=Path, help="Review and revise an archived native write")
+    parser.add_argument("--verified-review-from", type=Path, help="Reuse the completed review of that exact draft")
     args = parser.parse_args()
+    if args.verified_review_from and not args.verified_draft_from:
+        parser.error("--verified-review-from requires --verified-draft-from")
     receipt = verify_seed(args.build_seed)
-    key = sys.stdin.readline().strip()
-    if not key:
+    key = None if args.verified_review_from else sys.stdin.readline().strip()
+    if not args.verified_review_from and not key:
         parser.error("Pass the existing reviewer credential on private stdin")
     devices = "4,5,6,7"
     memory = subprocess.check_output(["nvidia-smi", "-i", devices,

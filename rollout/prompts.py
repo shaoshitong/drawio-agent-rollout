@@ -5,13 +5,15 @@ def generation_prompt(n: int, rounds: int = 4) -> str:
         detail = "Draw the major shapes, readable labels, and connectors with estimated positions and sizes."
         after_render = "Finish this round as soon as the initial draft renders successfully."
     else:
-        task = (f"Follow the supplied drawio-reconstruction skill. Start from your own round{n - 1}.drawio "
-                f"and read review{n - 1}.json. "
-                "Check its findings against reference.png, repair the candidate, and preserve correct regions.")
+        task = (f"Start from your own round{n - 1}.drawio and the concrete findings in review{n - 1}.json. "
+                "Use the supplied reference, draft and review to apply the fixes you can verify and save "
+                f"round{n}.drawio before measuring more regions. Preserve correct regions and leave "
+                "uncertain details for inspection after saving. If the draft is absent from the input, "
+                "read its file and then edit it. Use the supplied drawio-reconstruction skill.")
         detail = ("Match all visible content, positions, dimensions, typography, colors, line styles, "
                   "edge endpoints, and arrow directions.")
-        after_render = ("Inspect that render globally and locally against the reference and repair "
-                        "visible defects within this round's budget. Rendering success is not fidelity.")
+        after_render = ("Check the changed regions and the overall layout against the reference. "
+                        "Fix any clear regressions, then finish the round with remaining limitations.")
     return f"""You are the Generator for round {n} of {rounds}.
 {task}
 
