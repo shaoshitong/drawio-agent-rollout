@@ -134,7 +134,7 @@ class Proxy(BaseHTTPRequestHandler):
             data["chat_template_kwargs"] = {
                 **(data.get("chat_template_kwargs") or {}), "drawio_raw_tools": tools,
             }
-            from sft.state_prefix import CONTEXT_BUDGET
+            from sft.state_prefix import CONTEXT_BUDGET, NativeCounter
             from sft.store import snapshot
 
             past = getattr(self.server, "past_observations", None)
@@ -163,7 +163,13 @@ class Proxy(BaseHTTPRequestHandler):
             data["messages"] = messages
             if state_proof.get("build_phase"):
                 data.update(state_proof["build_phase"]["model_options"])
-            data["max_tokens"] = min(data.get("max_tokens", CONTEXT_BUDGET), CONTEXT_BUDGET - state_proof["input_tokens"] - 1)
+            input_tokens = state_proof["input_tokens"]
+            backend = getattr(self.server, "backend_processor", None)
+            if backend:
+                counter = NativeCounter(backend, data["tools"], chat_template_kwargs=data["chat_template_kwargs"])
+                state_proof["backend_input_tokens"] = counter(messages)
+                input_tokens = max(input_tokens, state_proof["backend_input_tokens"])
+            data["max_tokens"] = min(data.get("max_tokens", CONTEXT_BUDGET), CONTEXT_BUDGET - input_tokens - 1)
             body = json.dumps(data, ensure_ascii=False).encode()
         elif self.server.strip_history or self.server.context_policy:
             from sft.history import strip_history_thinking
@@ -314,6 +320,7 @@ def main():
     parser.add_argument("--context-source-commit")
     parser.add_argument("--context-endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     parser.add_argument("--state-prefix-model", type=Path)
+    parser.add_argument("--backend-prefix-model", type=Path)
     parser.add_argument("--state-case", type=Path)
     parser.add_argument("--past-observations", type=Path)
     parser.add_argument("--recover-thinking-loop", action="store_true")
@@ -336,6 +343,8 @@ def main():
         if not args.state_case or not args.context_cache:
             parser.error("state-prefix-model requires state-case and context-cache")
         processor = AutoProcessor.from_pretrained(args.state_prefix_model, local_files_only=True)
+        if args.backend_prefix_model:
+            server.backend_processor = AutoProcessor.from_pretrained(args.backend_prefix_model, local_files_only=True)
         server.state_policy = StateContext(processor, args.build_after_tools)
         server.state_store = Store(args.context_cache / "archive")
         server.state_case = args.state_case

@@ -183,10 +183,11 @@ def start_server(
     yarn=False,
     sampling="precise-coding",
     extra_args=(),
+    preserve_tool_schema=False,
 ):
     folder.mkdir()
     serving = folder / "serving"
-    create_overlay(root / "models" / model, serving, sampling)
+    create_overlay(root / "models" / model, serving, sampling, preserve_tool_schema=preserve_tool_schema)
     if yarn:
         serving = long_context_overlay(serving, folder / "long-context")
     command = [

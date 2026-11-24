@@ -60,7 +60,7 @@ def main():
     signal.signal(signal.SIGTERM, terminate)
     signal.signal(signal.SIGINT, terminate)
     server, log = start_server(args.root, args.out / "teacher", "generator", "Qwen3.8-27B",
-        devices, args.port, 32768, .25, env, sampling=args.sampling_preset)
+        devices, args.port, 32768, .25, env, sampling=args.sampling_preset, preserve_tool_schema=True)
     save(args.out / "launch.json", {"at": time.time(), "pid": os.getpid(), "server_pid": server.pid,
         "seed_id": receipt["seed_id"], "devices": devices, "source_commit": args.source_commit,
         "supervision_admitted": False, "training_started": False})

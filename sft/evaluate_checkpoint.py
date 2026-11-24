@@ -69,7 +69,8 @@ def start_context_proxy(args, case):
         "--context-cache", str(args.out / "context"),
         "--state-prefix-model", str(getattr(args, "state_prefix_model", args.model_path)), "--state-case", str(case)]
     if getattr(args, "build_seed", None):
-        command.extend(("--past-observations", str(args.build_seed / "past.json")))
+        command.extend(("--past-observations", str(args.build_seed / "past.json"),
+                        "--backend-prefix-model", str(args.model_path)))
     if getattr(args, "recover_thinking_loop", False):
         command.append("--recover-thinking-loop")
     if getattr(args, "build_after_tools", 0):
