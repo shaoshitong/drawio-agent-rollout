@@ -36,7 +36,11 @@ def run(args):
     args.out.mkdir(parents=True, exist_ok=False)
     used = subprocess.check_output(["nvidia-smi", "-i", args.gpu,
         "--query-gpu=memory.used", "--format=csv,noheader,nounits"], text=True)
-    if int(used.strip()) > 128:
+    if getattr(args, "wait_for_memory", False):
+        from .evaluate_live import wait_for_memory
+
+        wait_for_memory(args)
+    elif int(used.strip()) > 128:
         raise RuntimeError("Selected diagnostic GPU is occupied")
     original_bytes = args.request.read_bytes()
     original = json.loads(original_bytes)
@@ -90,6 +94,7 @@ def main():
     parser.add_argument("--causal-context", action="store_true")
     parser.add_argument("--serving-python", type=Path)
     parser.add_argument("--mem-fraction-static", type=float, default=0.85)
+    parser.add_argument("--wait-for-memory", action="store_true")
     parser.add_argument("--port", type=int, default=32639)
     parser.add_argument("--max-tokens", type=int, default=4096)
     parser.add_argument("--conditions", nargs="+", choices=("greedy", "original", "presence15"),
