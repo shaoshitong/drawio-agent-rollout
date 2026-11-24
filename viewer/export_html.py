@@ -141,14 +141,18 @@ def write_html(payload,output):
     # Escape HTML-significant characters in inert JSON, including literal </script>.
     packed = json.dumps(payload,ensure_ascii=False,separators=(',',':')).replace('<','\\u003c').replace('>','\\u003e').replace('&','\\u0026')
     style = (HERE/'static/style.css').read_text()
+    analysis_style = (HERE/'static/analysis.css').read_text() if (HERE/'static/analysis.css').is_file() else ''
+    analysis_script = (HERE/'static/analysis.js').read_text().replace('</script','<\\/script') if (HERE/'static/analysis.js').is_file() else ''
     script = (HERE/'static/app.js').read_text().replace('</script','<\\/script')
     shell = (HERE/'static/index.html').read_text()
     shell = shell.replace('<link rel="stylesheet" href="/style.css">','<style>'+style+'</style>')
+    shell = shell.replace('<link rel="stylesheet" href="/analysis.css">','<style>'+analysis_style+'</style>')
+    shell = shell.replace('<script src="/analysis.js" defer></script>','')
     shell = shell.replace('<script src="/app.js" defer></script>','')
     shell = shell.replace('<title>Trajectory Lab · Qwen 9B</title>','<title>Trajectory Lab · 离线对照快照</title>')
     csp = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; base-uri 'none'; form-action 'none'"
     shell = shell.replace('<meta charset="utf-8">','<meta charset="utf-8">\n  <meta http-equiv="Content-Security-Policy" content="'+csp+'">')
-    shell = shell.replace('</body>','<script type="application/json" id="offline-data">'+packed+'</script>\n<script>window.DSH_OFFLINE=JSON.parse(document.getElementById("offline-data").textContent);</script>\n<script>'+script+'</script>\n</body>')
+    shell = shell.replace('</body>','<script type="application/json" id="offline-data">'+packed+'</script>\n<script>window.DSH_OFFLINE=JSON.parse(document.getElementById("offline-data").textContent);</script>\n<script>'+analysis_script+'</script>\n<script>'+script+'</script>\n</body>')
     if 'const offline' not in script and 'DSH_OFFLINE' not in script:
         raise RuntimeError('Viewer does not yet contain offline runtime support')
     raw = shell.encode('utf-8')

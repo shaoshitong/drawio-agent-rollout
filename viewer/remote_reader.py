@@ -216,6 +216,105 @@ def offline_batch(args):
     return {'details':details,'message_pool':pool,'errors':errors}
 
 
+def analysis_bundle(args):
+    """Re-export the linked report without its display-only text truncation."""
+    folder = B/'checks/trajectory-dsh-view-20261124'
+    report_path = folder/'report.json'
+    report = read_json(report_path)
+    if args.get('section') == 'meta':
+        assets={}
+        for name in ('reference.png','base-draft.png','sft-reference.png'):
+            raw=checked(folder/name).read_bytes()
+            if name in report['assets'] and sha256(raw).hexdigest()!=report['assets'][name]:
+                raise ValueError('Comparison image checksum differs: '+name)
+            assets[name]='data:image/png;base64,'+base64.b64encode(raw).decode()
+        return {'sections':{key:len(rows) for key,rows in
+                            [('matched',report['matched']),('sft',report['sft']),*report['runs'].items()]},
+                'all_train':report['all_train'],'n_train':report['n_train'],'assets':assets,
+                'source':str(report_path),'source_sha256':sha256(report_path.read_bytes()).hexdigest(),
+                'collector_sha256':sha256((folder/'collect.py').read_bytes()).hexdigest()}
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    os.environ['USE_TORCH'] = '0'
+    os.environ['USE_TF'] = '0'
+    roots = [B/'checks/thinking-recovery-20261124/source-5174812',
+             B/'checks/thinking-recovery-20261124/source-3435c12']
+    root = next((p for p in roots if (p/'sft/audit_rollout_gap.py').is_file()),None)
+    if root is None:
+        raise FileNotFoundError('Archived report implementation unavailable')
+    sys.path.insert(0,str(root))
+    namespace = {'__name__':'trajectory_read_only_export'}
+    collector = (folder/'collect.py').read_text()
+    exec(compile(collector.split('if __name__')[0],str(folder/'collect.py'),'exec'),namespace)
+    namespace['init']()
+    namespace['short'] = lambda value,limit:value
+    section = args['section']
+    start,stop = int(args.get('start',0)),int(args.get('stop',40))
+    if not 0 <= start <= stop or stop-start > 40:
+        raise ValueError('Analysis batch must contain at most 40 records')
+    expected = report.get(section) if section in ('matched','sft') else report['runs'][section]
+    pool, pool_keys, rows = [],{},[]
+    def intern(messages):
+        refs=[]
+        for message in messages:
+            key=json.dumps(message,ensure_ascii=False,sort_keys=True)
+            if key not in pool_keys:
+                pool_keys[key]=len(pool);pool.append(message)
+            refs.append(pool_keys[key])
+        return refs
+    def add(row):
+        base = expected[len(rows)+start]
+        for key in namespace['FIELDS']:
+            value=row.get('retained_'+key,row[key]) if key.startswith('past_') else row[key]
+            if value != base[key]:
+                raise ValueError('Re-exported statistic differs: '+str(row['id'])+'/'+key)
+        row['ordinal'] = len(rows)+start+1
+        row['input_breakdown'] = {
+            'system_characters':sum(len(m['text']) for m in row['history'] if m['role']=='system'),
+            'user_characters':sum(len(m['text']) for m in row['history'] if m['role']=='user'),
+            'tool_result_characters':sum(len(m['text']) for m in row['history'] if m['role']=='tool'),
+            'assistant_characters':sum(len(m['text'])+sum(len(c['args']) for c in m['calls']) for m in row['history'] if m['role']=='assistant'),
+            'images':sum(m['images'] for m in row['history']), 'message_count':len(row['history'])}
+        row['history'] = intern(row['history'])
+        if 'full_history' in row:
+            row['full_history'] = intern(row['full_history'])
+        row['display_text_complete'] = True
+        rows.append(row)
+    if section in ('matched','sft'):
+        manifest = namespace['load_manifest'](namespace['manifest'])
+        indexed = {row['sample_id']:row for row in manifest}
+        for old in expected[start:stop]:
+            source = indexed[old['id']]
+            split,values,row = namespace['train'](source)
+            row['split'] = split
+            for name in ('past_output','past_thinking','past_tools'):
+                row['retained_'+name] = row[name]
+            row['source_decision_order'] = source.get('decision_order')
+            row['input_source'] = '冻结 manifest.prompt_tokens（本导出未重新计算输入总量）'
+            row['source'] = {'manifest':str(MANIFEST),'sample_id':source['sample_id'],
+                             'request_ref':source['request_ref'],'response_ref':source['response_ref'],
+                             'snapshot_root':source['snapshot_root']}
+            add(row)
+    else:
+        run_folder = B/'runs/causal-cot-20261122'/namespace['RUNS'][section]/'evaluation'
+        audit = namespace['read_rows'](run_folder/'generator-context-requests.jsonl')
+        captured = namespace['summarize'](run_folder/'generator-context-requests-raw',audit=audit)
+        for index,record in list(enumerate(captured))[start:stop]:
+            request = read_json(record['request'])
+            reply = record['response']
+            target = {'content':reply['content_text'],'reasoning_content':reply['reasoning_text'],
+                      'tool_calls':[{'id':call.get('id',''),'function':{'name':call['name'],'arguments':call.get('arguments','')}}
+                                    for call in reply['tool_calls'].values()]}
+            values = namespace['stats'](request['messages'],target)
+            row = {**namespace['detail'](request['messages'],target,values),**{k:v for k,v in expected[index].items()
+                    if k not in ('history','reply','thought','tool_calls')},
+                   'input_source':record.get('prompt_token_source'),
+                   'source':{'request':record['request'],'response':record['request'].replace('.request.json','.response.bin'),
+                             'request_sha256':record['request_sha256'],'response_sha256':record['response_sha256']}}
+            add(row)
+    return {'rows':rows,'history_pool':pool,'source_sha256':sha256(report_path.read_bytes()).hexdigest()}
+
+
 def main(args):
     kind = args['kind']
     if kind == 'manifest':
@@ -228,6 +327,8 @@ def main(args):
         return offline_selection()
     if kind == 'offline_batch':
         return offline_batch(args)
+    if kind == 'analysis_bundle':
+        return analysis_bundle(args)
     raise ValueError('Unknown read operation')
 
 

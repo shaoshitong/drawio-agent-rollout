@@ -34,6 +34,18 @@ The resulting file works directly from `file://` with no server. It contains CSS
 
 Each SFT sequence displays its input context followed by a separate Assistant supervision output. The terminal marker links to the actual saved Thinking, text and tool-call parameters. A tool call in the target is not a subsequent tool execution result. Historical fields omitted by the source exporter are labeled as unavailable rather than empty.
 
+The three-group analysis can be added to an existing standalone snapshot with:
+
+```sh
+python3 update_analysis.py --output /absolute/path/trajectory-lab.html
+```
+
+This reads the linked session's archived report and re-exports its saved text without display truncation. It does not launch inference. The default case matches the reference SHA across original 9B, 206 held-out teacher supervision records, and Step160/170/200. Teacher outputs came from DeepSeek Flash with Qwen27B reasoning rewrites; they are not 9B outputs. The second case contains 124 selected teacher training records and has no matched student run.
+
+The first three statistics sum every earlier full output in the selected run or supervision sequence, across both stages. Original and rewritten teacher histories are not mixed. The teacher sequences exclude two and thirteen original replies respectively that were not selected for supervision; this scope is shown on the page. Statistics for the input's retained history are separate, and missing stream tails remain labeled. Text tokenization is separate from native input measurement. Frozen teacher manifest input counts are labeled as manifest values, not newly measured state-v3 inputs.
+
+The existing GitHub Pages destination is `https://shaoshitong.github.io/trajectory-lab-analysis/`. Its `main/index.html` is the same standalone artifact. Publish with a normal fast-forward push and verify both the remote commit and the served HTML SHA; do not replace it with another hosting service.
+
 After a UI-only change, rebuild the shell around the existing embedded evidence without connecting remotely.
 
 ```sh

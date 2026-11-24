@@ -6,6 +6,8 @@
   <meta name="color-scheme" content="light dark">
   <title>Trajectory Lab · Qwen 9B</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/analysis.css">
+  <script src="/analysis.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -17,6 +19,7 @@
     <button id="refresh" class="button subtle" type="button">刷新记录 ↻</button>
   </header>
   <nav class="tabs" aria-label="分析视图">
+    <button class="tab" data-view="analysis" id="analysis-tab" aria-selected="false" type="button" hidden>DSH 三组对照</button>
     <button class="tab active" data-view="sft" aria-selected="true" type="button">SFT 重写对比 <span id="sft-count" class="count">—</span></button>
     <button class="tab" data-view="rollout" aria-selected="false" type="button">Rollout 轨迹 <span id="run-count" class="count">—</span></button>
     <button class="tab" data-view="training" aria-selected="false" type="button">训练进程</button>

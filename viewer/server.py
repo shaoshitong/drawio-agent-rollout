@@ -40,8 +40,10 @@ def remote_query(payload):
             CACHE.move_to_end(key)
             return json.loads(CACHE[key])
     script = 'PAYLOAD=' + repr(payload) + '\n' + REMOTE.read_text()
-    command = [str(SSH), '-oConnectTimeout=12', '-S', SOCKET,
-               'env PYTHONDONTWRITEBYTECODE=1 /DATA/disk1/zbw_tmp4/drawio-agent-sft-20261121/env/bin/python -']
+    execution = 'env PYTHONDONTWRITEBYTECODE=1 /DATA/disk1/zbw_tmp4/drawio-agent-sft-20261121/env/bin/python -'
+    if payload.get('kind') == 'analysis_bundle' and payload.get('section') != 'meta':
+        execution = "bash -c 'source /DATA/disk1/zbw_tmp4/drawio-agent-qwen38/runtime-env.sh >/dev/null; exec env CUDA_VISIBLE_DEVICES=\"\" PYTHONDONTWRITEBYTECODE=1 /DATA/disk1/zbw_tmp4/drawio-agent-sft-20261121/env/bin/python -'"
+    command = [str(SSH), '-oConnectTimeout=12', '-S', SOCKET,execution]
     with REMOTE_LOCK:
         process = subprocess.run(command, input=script, text=True, capture_output=True, timeout=70)
     if process.returncode:
@@ -193,7 +195,7 @@ class Handler(BaseHTTPRequestHandler):
                 identity,key=url.path[len('/api/sft/'):].rsplit('/images/',1)
                 raw,mime=get_sft_image(unquote(identity),key)
                 self.send_data(raw,mime)
-            elif url.path in ('/','/index.html','/app.js','/style.css'):
+            elif url.path in ('/','/index.html','/app.js','/style.css','/analysis.js','/analysis.css'):
                 name='index.html' if url.path=='/' else url.path[1:]
                 file=HERE/'static'/name
                 mime={'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}[file.suffix[1:]]

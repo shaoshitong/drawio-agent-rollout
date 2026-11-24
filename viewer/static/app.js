@@ -3,7 +3,7 @@
 const offline = window.DSH_OFFLINE && typeof window.DSH_OFFLINE === 'object' ? window.DSH_OFFLINE : null;
 const initialView = new URLSearchParams(location.search).get('view');
 const state = {
-  catalog: null, view: ['sft', 'rollout', 'training'].includes(initialView) ? initialView : 'sft', query: '', checkpoint: 'all', sample: null,
+  catalog: null, view: ['analysis', 'sft', 'rollout', 'training'].includes(initialView) ? initialView : offline?.analysis ? 'analysis' : 'sft', query: '', checkpoint: 'all', sample: null,
   left: null, right: null, metric: 'turns', diff: false, episode: 'loaded',
   requestSerial: 0, detailCache: new Map(), expanded: new Set(),
 };
@@ -667,8 +667,15 @@ function showTraining() {
   content.append(sourceDetails(meta.provenance || meta.sources || meta.training_source));
 }
 function showView() {
+  document.body.classList.toggle('analysis-view',state.view==='analysis');
   for(const tab of document.querySelectorAll('[data-view]')){
     const active=tab.dataset.view===state.view;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active));
+  }
+  if(state.view==='analysis'){
+    ++state.requestSerial; clear(content);
+    if(offline?.analysis && window.renderDshAnalysis) window.renderDshAnalysis(content,offline.analysis);
+    else content.append(notice('这份文件未包含三组轨迹对照。'));
+    return;
   }
   renderSidebar();
   if(state.view==='sft')showSft();else if(state.view==='rollout')showRollout();else showTraining();
@@ -678,6 +685,7 @@ async function loadCatalog() {
   const error=clear($('#fatal-error'));error.hidden=true;
   try {
     state.catalog=await request('/api/catalog');
+    $('#analysis-tab').hidden=!offline?.analysis;
     $('#model-name').textContent=state.catalog.meta?.model || 'Qwen 9B';
     $('#sft-count').textContent=number((state.catalog.sft || []).length);
     $('#run-count').textContent=number((state.catalog.runs || []).length);
