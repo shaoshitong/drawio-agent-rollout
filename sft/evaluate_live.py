@@ -16,6 +16,23 @@ from h20_eval import environment, start_server
 from trace_proxy import response_summary
 
 
+def wait_for_memory(args):
+    required = {args.gpu: 49152, **{device: 57344 for device in args.editor_gpu.split(",")}}
+    deadline = time.monotonic() + 21600
+    while True:
+        raw = subprocess.check_output(["nvidia-smi", "-i", ",".join(required),
+            "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"], text=True)
+        free = {row.split(",")[0].strip(): int(row.split(",")[1]) for row in raw.splitlines()}
+        waiting = [device for device, minimum in required.items() if free[device] <= minimum]
+        save(args.out.with_suffix(".waiting.json"), {"at": time.time(), "free_mib": free,
+             "minimum_mib_exclusive": required, "waiting_on": waiting, "memory_ready": not waiting})
+        if not waiting:
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Evaluation memory unavailable after six hours; no services started")
+        time.sleep(30)
+
+
 def watch_evaluation(devices, services, done, output, active=None):
     active = active if active is not None else {"folder": output / "evaluation", "started": time.time()}
     while not done.wait(5):
@@ -105,6 +122,7 @@ def main():
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--resume-generator", type=Path)
     parser.add_argument("--resume-note", default="")
+    parser.add_argument("--wait-for-memory", action="store_true")
     parser.add_argument("--gpu", default="6")
     parser.add_argument("--editor-gpu", default="7")
     parser.add_argument("--port", type=int, default=32680)
@@ -117,6 +135,8 @@ def main():
     devices = [args.gpu, *args.editor_gpu.split(",")]
     if len(set(devices)) != len(devices) or not set(devices) <= {"4", "5", "6", "7"}:
         parser.error("Use distinct task-owned GPUs among 4-7")
+    if args.wait_for_memory:
+        wait_for_memory(args)
     key = sys.stdin.readline().strip()
     if not key:
         parser.error("Reviewer credential must arrive on private stdin")
