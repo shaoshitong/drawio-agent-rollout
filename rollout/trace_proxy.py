@@ -31,7 +31,7 @@ def images(value):
 
 def response_summary(chunks, with_arguments=False, with_reasoning=False):
     summary = {"content_characters": 0, "reasoning_characters": 0, "tool_calls": {}}
-    reasoning = []
+    reasoning, content = [], []
     for line in b"".join(chunks).splitlines():
         if not line.startswith(b"data: ") or line == b"data: [DONE]":
             continue
@@ -50,6 +50,7 @@ def response_summary(chunks, with_arguments=False, with_reasoning=False):
             summary["reasoning_characters"] += len(delta.get("reasoning_content") or "")
             if with_reasoning:
                 reasoning.append(delta.get("reasoning_content") or "")
+                content.append(delta.get("content") or "")
             for call in delta.get("tool_calls") or []:
                 tool = summary["tool_calls"].setdefault(
                     str(call.get("index", 0)), {"name": "", "argument_characters": 0}
@@ -63,6 +64,7 @@ def response_summary(chunks, with_arguments=False, with_reasoning=False):
                         tool["id"] = call["id"]
     if with_reasoning:
         summary["reasoning_text"] = "".join(reasoning)
+        summary["content_text"] = "".join(content)
     return summary
 
 
