@@ -29,6 +29,29 @@ def terminate(signum, _frame):
     raise SystemExit(128 + signum)
 
 
+def free_gpu_memory(devices):
+    output = subprocess.check_output(["nvidia-smi", "-i", devices, "--query-gpu=memory.free",
+                                      "--format=csv,noheader,nounits"], text=True)
+    return [int(line) for line in output.splitlines()]
+
+
+def await_idle_gpus(devices, status):
+    deadline = time.monotonic() + 21600
+    while True:
+        free = free_gpu_memory(devices)
+        running = subprocess.check_output(["nvidia-smi", "-i", devices, "--query-compute-apps=pid",
+                                           "--format=csv,noheader,nounits"], text=True)
+        pids = [int(line) for line in running.splitlines() if line.strip()]
+        idle = not pids and min(free) > 49152
+        save(status, {"at": time.time(), "devices": devices, "free_mib": free,
+                      "compute_pids": pids, "ready": idle})
+        if idle:
+            return
+        if time.monotonic() >= deadline:
+            raise TimeoutError("The designated GPUs are occupied; no model was started")
+        time.sleep(30)
+
+
 def main():
     from setproctitle import setproctitle
 
@@ -41,6 +64,7 @@ def main():
     parser.add_argument("--fresh", action="store_true", help="Use only the verified training reference")
     parser.add_argument("--verified-draft-from", type=Path, help="Review and revise an archived native write")
     parser.add_argument("--verified-review-from", type=Path, help="Reuse the completed review of that exact draft")
+    parser.add_argument("--wait-for-idle-gpus", action="store_true", help="Wait for GPUs 4–7 without starting a model")
     args = parser.parse_args()
     if args.verified_review_from and not args.verified_draft_from:
         parser.error("--verified-review-from requires --verified-draft-from")
@@ -49,9 +73,14 @@ def main():
     if not args.verified_review_from and not key:
         parser.error("Pass the existing reviewer credential on private stdin")
     devices = "4,5,6,7"
-    memory = subprocess.check_output(["nvidia-smi", "-i", devices,
-        "--query-gpu=memory.free", "--format=csv,noheader,nounits"], text=True)
-    if min(map(int, memory.splitlines())) <= 49152:
+    signal.signal(signal.SIGTERM, terminate)
+    signal.signal(signal.SIGINT, terminate)
+    if args.wait_for_idle_gpus:
+        if args.out.exists():
+            parser.error("Choose a new output directory before waiting for GPUs")
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        await_idle_gpus(devices, args.out.with_suffix(".waiting.json"))
+    if min(free_gpu_memory(devices)) <= 49152:
         raise RuntimeError("TP4 requires at least 48 GiB free on each authorized GPU")
     args.out.mkdir(parents=True)
     args.reference = args.build_seed / "case/reference.png"
@@ -67,8 +96,6 @@ def main():
         "TP4 Qwen3.8 teacher from reference only")
     env = environment(args.root)
     env.update(SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK="0", DSH_MATCH_TRAINING_IMAGES="1")
-    signal.signal(signal.SIGTERM, terminate)
-    signal.signal(signal.SIGINT, terminate)
     server, log = start_server(args.root, args.out / "teacher", "generator", "Qwen3.8-27B",
         devices, args.port, 32768, .25, env, sampling=args.sampling_preset, preserve_tool_schema=True)
     save(args.out / "launch.json", {"at": time.time(), "pid": os.getpid(), "server_pid": server.pid,
