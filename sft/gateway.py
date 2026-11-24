@@ -12,7 +12,10 @@ import time
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from store import BudgetExhausted, canonical, snapshot
+if __package__:
+    from .store import BudgetExhausted, canonical, snapshot
+else:
+    from store import BudgetExhausted, canonical, snapshot
 
 
 PRICING = {
@@ -61,10 +64,10 @@ def parse_reply(raw):
             output = choices.setdefault(
                 item["index"], {"role": "assistant", "content": "", "reasoning_content": "", "tools": {}}
             )
-            delta = item.get("delta", {})
+            delta = item.get("delta") or {}
             for key in ("content", "reasoning_content"):
                 output[key] += delta.get(key) or ""
-            for fragment in delta.get("tool_calls", []):
+            for fragment in delta.get("tool_calls") or []:
                 tool = output["tools"].setdefault(
                     fragment["index"],
                     {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
