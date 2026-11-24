@@ -117,16 +117,17 @@ def keep_observations(observations, tokenizer, budget=2048):
 def add_observations(messages, observations, counter, count):
     content = messages[-1]["content"][0]
     original = content["text"]
-    budget = min(2048, INPUT_BUDGET - count - 32)
+    input_budget = getattr(counter, "input_budget", INPUT_BUDGET)
+    budget = min(2048, input_budget - count - 32)
     while budget > 0:
         summary, retained = keep_observations(observations, counter.tokenizer, budget)
         if not summary:
             break
         content["text"] = original + "\n\nEarlier observations (complete retained results):\n" + summary
         expanded = counter(messages)
-        if expanded <= INPUT_BUDGET:
+        if expanded <= input_budget:
             return expanded, retained
-        budget -= expanded - INPUT_BUDGET + 4
+        budget -= expanded - input_budget + 4
     content["text"] = original
     return count, 0
 
@@ -159,11 +160,14 @@ def resolve_images(messages, read_blob):
 
 
 class NativeCounter:
-    def __init__(self, processor, tools, read_blob=None, chat_template_kwargs=None):
+    def __init__(self, processor, tools, read_blob=None, chat_template_kwargs=None,
+                 input_budget=INPUT_BUDGET, allow_state_only=False):
         self.processor, self.tools = processor, tools
         self.tokenizer = processor.tokenizer
         self.read_blob = read_blob
         self.enable_thinking = (chat_template_kwargs or {}).get("enable_thinking", True)
+        self.input_budget = input_budget
+        self.allow_state_only = allow_state_only
 
     @lru_cache(maxsize=512)
     def image_tokens(self, url):
@@ -188,6 +192,7 @@ class NativeCounter:
 
 def build_state_prefix(messages, files, read_file, stage, counter, summaries=()):
     """No target argument: input construction cannot choose files using the answer."""
+    input_budget = getattr(counter, "input_budget", INPUT_BUDGET)
     messages = strip_history_thinking(messages)
     cycles = tool_cycles(messages)
     recent = cycles[-4:]
@@ -220,21 +225,22 @@ def build_state_prefix(messages, files, read_file, stage, counter, summaries=())
             content.extend(({"type": "text", "text": "Image: " + name}, image_part(raw)))
     packet = {"role": "user", "content": content}
     pending = latest_error(cycles)
-    for keep in range(min(4, len(cycles)), 0, -1) if cycles else (0,):
+    minimum = 0 if getattr(counter, "allow_state_only", False) else 1
+    for keep in range(min(4, len(cycles)), minimum - 1, -1) if cycles else (0,):
         earlier = [item for item in summaries if item["cycle"] < len(cycles) - keep]
         retained = cycles[-keep:] if keep else []
-        protected = [pending] if pending and pending not in retained else []
+        protected = [pending] if pending and pending not in retained and keep else []
         history = [message for cycle in protected + retained for message in cycle if message not in task + latest]
         ledger = keep_lines(action_ledger(cycles[:-keep] if keep else cycles), counter.tokenizer, 1024)
         content[0]["text"] = "\n\n".join(state) + "\n\nEarlier actions:\n" + ledger
         candidate = systems + task + history + latest + [packet]
         count = counter(candidate)
-        if count <= INPUT_BUDGET:
+        if count <= input_budget:
             injected = False
             if optional:
                 content[0]["text"] += "\n\n" + optional
                 extended = counter(candidate)
-                if extended <= INPUT_BUDGET:
+                if extended <= input_budget:
                     count, injected = extended, True
                 else:
                     content[0]["text"] = content[0]["text"][:-len(optional) - 2]

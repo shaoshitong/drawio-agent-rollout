@@ -7,7 +7,7 @@ from .history import strip_history_thinking
 from .observation_context import (
     PROTECTED, measured_observation, numeric_observation, prose_observation, text_parts,
 )
-from .state_prefix import NativeCounter, build_state_prefix, tool_cycles, tool_result
+from .state_prefix import INPUT_BUDGET, NativeCounter, build_state_prefix, tool_cycles, tool_result
 
 
 def build_phase(request, files, stage, limit):
@@ -60,10 +60,12 @@ class StateContext:
     def build(self, request, files, read_file, stage, source_ref, read_blob=None):
         request, phase = build_phase(request, files, stage, self.build_after_tools)
         counter = NativeCounter(self.processor, request.get("tools", []), read_blob,
-                                request.get("chat_template_kwargs") if phase else None)
+                                request.get("chat_template_kwargs") if phase else None,
+                                input_budget=12288 if phase else INPUT_BUDGET, allow_state_only=bool(phase))
         summaries = self.past_observations(request["messages"])
         candidate, proof = build_state_prefix(request["messages"], files, read_file, stage, counter, summaries)
         proof["source_request_ref"] = source_ref
         if phase:
+            phase["input_budget"] = counter.input_budget
             proof["build_phase"] = phase
         return candidate, proof
