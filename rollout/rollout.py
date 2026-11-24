@@ -143,7 +143,7 @@ def run_turn(args, role, number, session):
     if model.startswith("Qwen/"):
         profile["preserve_thinking"] = args.preserve_thinking and role == "generator"
         profile["qwen38_effort"] = args.qwen38_effort
-        if role == "generator" and model == "Qwen/Qwen3.8-27B":
+        if role == "generator":
             profile["stream_idle_timeout_ms"] = args.turn_timeout * 1000
         if role == "generator" and args.compaction_headroom_tokens is not None:
             profile["compaction_headroom_tokens"] = args.compaction_headroom_tokens
