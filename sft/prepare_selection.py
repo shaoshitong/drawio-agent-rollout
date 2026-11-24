@@ -15,9 +15,10 @@ from .check_prefix_chains import Reader
 from .data import load_manifest
 from .rewrite_cot import atomic, select_rows
 from .sampling_pool import phase_guards
-from .state_prefix import NativeCounter, build_state_prefix, snapshot_before_request
+from .state_context import StateContext
+from .state_prefix import snapshot_before_request
 
-POLICY = "decision-visibility-cap64-v3"
+POLICY = "decision-visibility-cap64-v4"
 PROGRESS = {"native_xml_changed", "code_file_changed", "candidate_render_changed"}
 
 
@@ -48,12 +49,12 @@ def sample_phase(rows, effects, cap, seed, eligible=None):
     return selected, {**guards, "protected": len(protected), "retained": len(selected)}
 
 
-def qualify_decision(row, reader, processor, effect):
+def qualify_decision(row, reader, state, effect):
+    processor = state.processor
     request = reader.value(row["request_ref"])
     files, snapshot = snapshot_before_request(row, reader.store)
-    counter = NativeCounter(processor, request.get("tools", []), reader.store.raw)
-    prefix, proof = build_state_prefix(request["messages"], files,
-        lambda name: reader.store.raw(files[name]), row["stage"], counter)
+    prefix, proof = state.build(request, files, lambda name: reader.store.raw(files[name]),
+        row["stage"], row["request_ref"], reader.store.raw)
     result = {"sample_id": row["sample_id"], "episode": row["episode"], "stage": row["stage"],
               "split": row["split"], "state": proof, "snapshot": snapshot,
               "mutation": effect["artifact_effect"] in {"native_xml_changed", "code_file_changed"},
@@ -70,6 +71,7 @@ def qualify_decision(row, reader, processor, effect):
 
 def qualify_episode(rows, processor, effects, cap, seed, output):
     reader = Reader(rows[0]["snapshot_root"])
+    state = StateContext(processor)
     effects = dict(effects)
     if rows[0]["split"] == "validation":
         pairs = snapshot_pairs(rows[0]["snapshot_root"])
@@ -84,7 +86,7 @@ def qualify_episode(rows, processor, effects, cap, seed, output):
     for stage, members in sorted(phases.items()):
         members.sort(key=lambda row: row["call_id"])
         terminal = members[-1]
-        phase = [qualify_decision(row, reader, processor, effects[row["sample_id"]]) for row in members]
+        phase = [qualify_decision(row, reader, state, effects[row["sample_id"]]) for row in members]
         eligible = {row["sample_id"] for row in phase if row["keep"]}
         mutations = [row for row in phase if row["mutation"]]
         mutation_kept = sum(row["keep"] for row in mutations)

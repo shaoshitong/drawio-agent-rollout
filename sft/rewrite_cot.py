@@ -80,7 +80,7 @@ class Rewriter:
             from .state_context import StateContext
 
             processor = AutoProcessor.from_pretrained(args.state_prefix_model, local_files_only=True)
-            self.state = StateContext(processor, ObservationContext(self))
+            self.state = StateContext(processor)
 
     @lru_cache(maxsize=8192)
     def count(self, text):

@@ -12,12 +12,11 @@ import time
 
 from .evaluate_checkpoint import reconstruct, ready, save, start_model, stop_model
 from .detect_loop import reasoning_loop
-from h20_eval import environment, start_server
 from trace_proxy import response_summary
 
 
 def wait_for_memory(args):
-    required = {args.gpu: 49152, **{device: 57344 for device in args.editor_gpu.split(",")}}
+    required = {args.gpu: 49152}
     deadline = time.monotonic() + 21600
     while True:
         raw = subprocess.check_output(["nvidia-smi", "-i", ",".join(required),
@@ -132,9 +131,8 @@ def main():
     args = parser.parse_args()
     if args.cases and args.resume_generator:
         parser.error("--resume-generator applies to a single --reference")
-    devices = [args.gpu, *args.editor_gpu.split(",")]
-    if len(set(devices)) != len(devices) or not set(devices) <= {"4", "5", "6", "7"}:
-        parser.error("Use distinct task-owned GPUs among 4-7")
+    if args.gpu not in {"4", "5", "6", "7"}:
+        parser.error("Use a task-owned GPU among 4-7")
     if args.wait_for_memory:
         wait_for_memory(args)
     key = sys.stdin.readline().strip()
@@ -142,38 +140,28 @@ def main():
         parser.error("Reviewer credential must arrive on private stdin")
     args.out.mkdir(parents=True, exist_ok=False)
     args.causal_context = True
-    args.editor_model = args.root / "models/Qwen3.8-27B"
-    args.editor_endpoint = f"http://127.0.0.1:{args.editor_port}/v1/chat/completions"
     args.preprocessor_python = Path(sys.executable)
     args.generator_model = "Qwen/Qwen3.5-9B"
     args.sampling_preset = "precise-coding"
     args.preserve_thinking = False
-    args.deployment = "Frozen full-parameter checkpoint loaded in BF16; shared training GPUs"
+    args.deployment = "Frozen full-parameter checkpoint loaded in BF16; deterministic CPU context"
     services, done = [], Event()
     active = {"folder": args.out / "evaluation", "started": time.time()}
-    watcher = Thread(target=watch_evaluation, args=(args.gpu + "," + args.editor_gpu,
+    watcher = Thread(target=watch_evaluation, args=(args.gpu,
                      services, done, args.out, active), daemon=True)
     watcher.start()
     try:
         references = load_references(args)
         save(args.out / "references.json", {"references": references})
-        editor_environment = environment(args.root)
-        # Shared TP ranks still allocate using the minimum free memory.
-        editor_environment["SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK"] = "0"
-        editor = start_server(args.root, args.out / "editor", "generator", "Qwen3.8-27B",
-            args.editor_gpu, args.editor_port, 262144, args.editor_fraction,
-            editor_environment, sampling="qwen38")
-        services.append(editor)
-        ready(editor[0], args.editor_port, timeout=900)
         serving = copy(args)
         serving.out = args.out / "generator-service"
         serving.out.mkdir()
         generator = start_model(serving, args.root / "envs/serving/bin/python")
         services.append(generator)
         ready(generator[0], args.port, timeout=900)
-        save(args.out / "services.json", {"at": time.time(), "editor_pid": editor[0].pid,
+        save(args.out / "services.json", {"at": time.time(),
              "generator_pid": generator[0].pid, "generator_gpu": args.gpu,
-             "editor_gpu": args.editor_gpu, "training_unchanged": True,
+             "state_preprocessing": "deterministic CPU", "training_unchanged": True,
              "source_commit": args.source_commit})
         run_references(args, key, references, active)
     except Exception as error:

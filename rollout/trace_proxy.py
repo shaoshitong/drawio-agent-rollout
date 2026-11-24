@@ -251,7 +251,18 @@ def main():
     server.capture_raw = args.capture_raw
     server.strip_history, server.context_policy = args.strip_history_thinking, None
     server.state_policy = None
-    if args.context_cache:
+    if args.state_prefix_model:
+        from transformers import AutoProcessor
+        from sft.state_context import StateContext
+        from sft.store import Store
+
+        if not args.state_case or not args.context_cache:
+            parser.error("state-prefix-model requires state-case and context-cache")
+        processor = AutoProcessor.from_pretrained(args.state_prefix_model, local_files_only=True)
+        server.state_policy = StateContext(processor)
+        server.state_store = Store(args.context_cache / "archive")
+        server.state_case = args.state_case
+    elif args.context_cache:
         from types import SimpleNamespace
         from sft.rewrite_cot import Rewriter
         from sft.observation_context import ObservationContext
@@ -261,17 +272,6 @@ def main():
         editor = Rewriter(SimpleNamespace(model=args.context_model, output=args.context_cache,
             endpoint=args.context_endpoint, source_commit=args.context_source_commit, rewrite_observations=False))
         server.context_policy = ObservationContext(editor)
-        if args.state_prefix_model:
-            from transformers import AutoProcessor
-            from sft.state_context import StateContext
-
-            if not args.state_case:
-                parser.error("state-prefix-model requires state-case")
-            processor = AutoProcessor.from_pretrained(args.state_prefix_model, local_files_only=True)
-            server.state_policy = StateContext(processor, server.context_policy)
-            server.state_store, server.state_case = editor.store, args.state_case
-    elif args.state_prefix_model:
-        parser.error("state-prefix-model requires the causal editor context options")
     server.request_counter, server.request_limit, server.limit_reached = count(1), args.request_limit, False
     server.serve_forever()
 

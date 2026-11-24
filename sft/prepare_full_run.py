@@ -12,9 +12,10 @@ from .state_prefix import CONTEXT_BUDGET, POLICY
 
 
 def fixed_config(base, manifest, model, output, rows):
+    policies = {row.get("state_prefix_policy") for row in rows}
     if any(row["token_count"] > CONTEXT_BUDGET or row.get("history_policy") != HISTORY_POLICY
-           or row.get("state_prefix_policy") != POLICY for row in rows):
-        raise ValueError("Fresh SFT requires measured, bounded decisions with the current prefix policy")
+           for row in rows) or len(policies) != 1 or not policies <= {POLICY, "own-state-prefix-v2"}:
+        raise ValueError("Fresh SFT requires bounded decisions with one supported prefix policy")
     updates = math.ceil(len(rows) / 32)
     inherited = {key: value for key, value in base.items() if key not in (
         "bridge_checkpoint", "gate_indices", "sampling_pool", "max_train_samples", "store_path")}

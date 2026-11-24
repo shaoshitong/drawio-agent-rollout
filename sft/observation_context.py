@@ -30,6 +30,25 @@ def prose_observation(text):
     return letters / len(body) >= 0.55 and digits / len(body) <= 0.12
 
 
+def numeric_observation(text):
+    body = text.removeprefix("<tool_response>").removesuffix("</tool_response>").strip()
+    return len(body) >= 32 and sum(char.isdigit() for char in body) >= 16 and sum(
+        char.isalpha() for char in body) / len(body) < 0.55
+
+
+def measured_observation(source, function):
+    arguments = function.get("arguments", {})
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except ValueError:
+            arguments = {}
+    title = arguments.get("description") if isinstance(arguments, dict) else None
+    title = title or function.get("name", "tool")
+    value = source if PROTECTED.search(source) else encode_pixel_runs(source)
+    return f"Earlier tool result ({title}):\n{value}"
+
+
 def text_parts(message):
     content = message.get("content")
     if isinstance(content, str):

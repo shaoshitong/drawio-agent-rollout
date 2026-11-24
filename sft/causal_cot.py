@@ -87,7 +87,7 @@ def apply_rewrite(request, response, row, overlay):
         from .state_prefix import POLICY as state_policy
 
         state = overlay["state_prefix"]
-        if state["policy"] not in (state_policy, "own-state-prefix-v1") or state["source_request_ref"] != row["request_ref"]:
+        if state["policy"] not in (state_policy, "own-state-prefix-v2", "own-state-prefix-v1") or state["source_request_ref"] != row["request_ref"]:
             raise ValueError("State prefix belongs to another request or policy")
         request["messages"] = state["messages"]
     return request, response

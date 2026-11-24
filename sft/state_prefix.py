@@ -15,7 +15,7 @@ from .audit_context_budget import template_messages, tool_result
 from .history import strip_history_thinking
 
 
-POLICY = "own-state-prefix-v2"
+POLICY = "own-state-prefix-v3"
 INPUT_BUDGET = 24576
 CONTEXT_BUDGET = 32768
 CODE_SUFFIXES = {".py", ".js", ".sh", ".xml", ".drawio", ".svg"}
@@ -102,6 +102,35 @@ def action_ledger(cycles):
     return lines
 
 
+def keep_observations(observations, tokenizer, budget=2048):
+    selected, used = [], 0
+    for observation in reversed(observations):
+        size = observation["tokens"] + 3
+        if used + size <= budget:
+            selected.insert(0, observation["text"])
+            used += size
+    while selected and len(tokenizer.encode("\n".join(selected), add_special_tokens=False)) > budget:
+        selected.pop(0)
+    return "\n".join(selected), len(selected)
+
+
+def add_observations(messages, observations, counter, count):
+    content = messages[-1]["content"][0]
+    original = content["text"]
+    budget = min(2048, INPUT_BUDGET - count - 32)
+    while budget > 0:
+        summary, retained = keep_observations(observations, counter.tokenizer, budget)
+        if not summary:
+            break
+        content["text"] = original + "\n\nEarlier observations (complete retained results):\n" + summary
+        expanded = counter(messages)
+        if expanded <= INPUT_BUDGET:
+            return expanded, retained
+        budget -= expanded - INPUT_BUDGET + 4
+    content["text"] = original
+    return count, 0
+
+
 def current_files(files, recent, stage):
     history = json.dumps(recent, ensure_ascii=False)
     selected = {name for name in files if Path(name).suffix in CODE_SUFFIXES and name in history}
@@ -182,8 +211,6 @@ def build_state_prefix(messages, files, read_file, stage, counter, summaries=())
         elif name == latest_xml:
             optional = f"<own_file path={json.dumps(name)}>\n{raw.decode()}\n</own_file>"
     state.append("Files remain available in your workspace. Read them with tools when needed; omitted file content is not known.")
-    summary = keep_lines(summaries, counter.tokenizer, 2048)
-    state.append("Earlier prose observations:\n" + summary)
     content = [{"type": "text", "text": ""}]
     for name in ("reference.png", png):
         if name:
@@ -193,6 +220,7 @@ def build_state_prefix(messages, files, read_file, stage, counter, summaries=())
     packet = {"role": "user", "content": content}
     pending = latest_error(cycles)
     for keep in range(min(4, len(cycles)), 0, -1) if cycles else (0,):
+        earlier = [item for item in summaries if item["cycle"] < len(cycles) - keep]
         retained = cycles[-keep:] if keep else []
         protected = [pending] if pending and pending not in retained else []
         history = [message for cycle in protected + retained for message in cycle if message not in task + latest]
@@ -209,9 +237,12 @@ def build_state_prefix(messages, files, read_file, stage, counter, summaries=())
                     count, injected = extended, True
                 else:
                     content[0]["text"] = content[0]["text"][:-len(optional) - 2]
+            count, observation_count = add_observations(candidate, earlier, counter, count)
             return resolve_images(candidate, counter.read_blob), {"policy": POLICY, "input_tokens": count, "recent_cycles": keep,
                 "original_cycles": len(cycles), "files_sha256": hashes,
                 "latest_xml_fulltext_injected": injected,
+                "past_observation_candidates": len(earlier),
+                "past_observations_retained": observation_count,
                 "history_thinking_messages": 0, "targets_used_to_build_input": False}
     from .observation_context import pack_pixel_observations
 

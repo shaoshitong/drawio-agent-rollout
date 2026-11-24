@@ -64,8 +64,7 @@ def start_context_proxy(args, case):
     command = [str(python), str(HERE.parent / "rollout/trace_proxy.py"),
         "--port", str(args.port + 101), "--upstream", f"http://127.0.0.1:{args.port}",
         "--audit", str(args.out / "generator-context-requests.jsonl"), "--capture-raw",
-        "--context-cache", str(args.out / "context"), "--context-model", str(args.editor_model),
-        "--context-source-commit", args.source_commit, "--context-endpoint", args.editor_endpoint,
+        "--context-cache", str(args.out / "context"),
         "--state-prefix-model", str(args.model_path), "--state-case", str(case)]
     environment = dict(os.environ, PATH=str(python.parent) + os.pathsep + os.environ["PATH"],
                        CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1", TOKENIZERS_PARALLELISM="false")
@@ -148,8 +147,10 @@ def reconstruct(args, key):
         "reviewer_matches_teacher_model": True, "reviewer_budget_cny": 12}
     protocol["preserve_raw_tool_schema"] = True
     if getattr(args, "causal_context", False):
+        from sft.state_prefix import POLICY
+
         protocol.update(generator_context=32768, generator_raw_history_window=config.context_window,
-                        state_prefix_policy="own-state-prefix-v2", generator_auto_compaction=False,
+                        state_prefix_policy=POLICY, generator_auto_compaction=False,
                         image_preprocessing="training-native-cpu")
     if previous:
         protocol["resumed_generator_from"] = str(previous)
@@ -206,8 +207,6 @@ def main():
     parser.add_argument("--editor-endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     parser.add_argument("--preprocessor-python", type=Path)
     args = parser.parse_args()
-    if args.causal_context and not args.editor_model:
-        parser.error("causal-context requires editor-model")
     args.root, args.out = args.root.absolute(), args.out.absolute()
     args.model_path, args.reference = args.model_path.resolve(), args.reference.resolve()
     key = sys.stdin.readline().strip()
