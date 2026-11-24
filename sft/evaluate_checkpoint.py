@@ -70,6 +70,8 @@ def start_context_proxy(args, case):
         "--state-prefix-model", str(args.model_path), "--state-case", str(case)]
     if getattr(args, "recover_thinking_loop", False):
         command.append("--recover-thinking-loop")
+    if getattr(args, "build_after_tools", 0):
+        command.extend(("--build-after-tools", str(args.build_after_tools)))
     environment = dict(os.environ, PATH=str(python.parent) + os.pathsep + os.environ["PATH"],
                        CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1", TOKENIZERS_PARALLELISM="false")
     log = (args.out / "context-proxy.log").open("wb")
@@ -155,6 +157,7 @@ def reconstruct(args, key):
         "deployment": getattr(args, "deployment", "Checkpoint served in BF16; numerical PEFT/export parity not yet certified"),
         "reviewer_matches_teacher_model": True, "reviewer_budget_cny": 12}
     protocol["thinking_loop_recovery"] = getattr(args, "recover_thinking_loop", False)
+    protocol["build_after_tools"] = getattr(args, "build_after_tools", 0)
     protocol["preserve_raw_tool_schema"] = True
     if getattr(args, "causal_context", False):
         from sft.state_prefix import POLICY

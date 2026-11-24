@@ -159,10 +159,11 @@ def resolve_images(messages, read_blob):
 
 
 class NativeCounter:
-    def __init__(self, processor, tools, read_blob=None):
+    def __init__(self, processor, tools, read_blob=None, chat_template_kwargs=None):
         self.processor, self.tools = processor, tools
         self.tokenizer = processor.tokenizer
         self.read_blob = read_blob
+        self.enable_thinking = (chat_template_kwargs or {}).get("enable_thinking", True)
 
     @lru_cache(maxsize=512)
     def image_tokens(self, url):
@@ -175,7 +176,7 @@ class NativeCounter:
 
     def __call__(self, messages):
         rendered = self.processor.apply_chat_template(template_messages(messages), tokenize=False,
-            tools=self.tools, enable_thinking=True, add_generation_prompt=True)
+            tools=self.tools, enable_thinking=self.enable_thinking, add_generation_prompt=True)
         count = len(self.tokenizer(rendered, add_special_tokens=False)["input_ids"])
         for message in messages:
             content = message.get("content")

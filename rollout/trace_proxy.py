@@ -115,6 +115,8 @@ class Proxy(BaseHTTPRequestHandler):
                 self.send_error(413, "Protected own state exceeds the fixed input budget")
                 return
             data["messages"] = messages
+            if state_proof.get("build_phase"):
+                data.update(state_proof["build_phase"]["model_options"])
             data["max_tokens"] = min(data.get("max_tokens", CONTEXT_BUDGET), CONTEXT_BUDGET - state_proof["input_tokens"] - 1)
             body = json.dumps(data, ensure_ascii=False).encode()
         elif self.server.strip_history or self.server.context_policy:
@@ -248,6 +250,7 @@ def main():
     parser.add_argument("--state-prefix-model", type=Path)
     parser.add_argument("--state-case", type=Path)
     parser.add_argument("--recover-thinking-loop", action="store_true")
+    parser.add_argument("--build-after-tools", type=int, default=0)
     args = parser.parse_args()
     if args.strip_history_thinking or args.context_cache or args.state_prefix_model:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -266,7 +269,7 @@ def main():
         if not args.state_case or not args.context_cache:
             parser.error("state-prefix-model requires state-case and context-cache")
         processor = AutoProcessor.from_pretrained(args.state_prefix_model, local_files_only=True)
-        server.state_policy = StateContext(processor)
+        server.state_policy = StateContext(processor, args.build_after_tools)
         server.state_store = Store(args.context_cache / "archive")
         server.state_case = args.state_case
         if args.recover_thinking_loop:

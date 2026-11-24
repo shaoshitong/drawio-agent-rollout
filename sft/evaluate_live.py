@@ -130,6 +130,7 @@ def main():
     parser.add_argument("--resume-generator", type=Path)
     parser.add_argument("--neutral-resume", action="store_true")
     parser.add_argument("--recover-thinking-loop", action="store_true")
+    parser.add_argument("--build-after-tools", type=int, default=0)
     parser.add_argument("--resume-note", default="")
     parser.add_argument("--wait-for-memory", action="store_true")
     parser.add_argument("--gpu", default="6")
