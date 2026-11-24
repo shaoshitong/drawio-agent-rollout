@@ -305,6 +305,8 @@ def run_turn(args, role, number, session):
     )
     if session:
         command.extend(("--session-id", session))
+    if continuing and role == "generator" and getattr(args, "neutral_resume", False):
+        prompt = "Continue."
     command.append(prompt)
     started = time.monotonic()
     auth_file = args.generator_auth_file if role == "generator" else getattr(args, "reviewer_auth_file", None)

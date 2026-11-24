@@ -116,6 +116,7 @@ def evaluation_config(args, reviewer_url="", reviewer_auth=None):
         sampling_preset=getattr(args, "sampling_preset", "precise-coding"), reviewer_sampling_preset="model", seed=42,
         rounds=2, skill_mode="full", single_self_review=True, seeded=False, preserve_tool_schema=True,
         resume=True, resume_note=getattr(args, "resume_note", ""),
+        neutral_resume=getattr(args, "neutral_resume", False),
         compaction_headroom_tokens=None, no_auto_compaction=causal, turn_timeout=21600)
 
 
@@ -154,6 +155,7 @@ def reconstruct(args, key):
                         image_preprocessing="training-native-cpu")
     if previous:
         protocol["resumed_generator_from"] = str(previous)
+        protocol["neutral_resume"] = config.neutral_resume
     save(args.out / "protocol.json", protocol)
     generator_session = reviewer_session = None
     context_proxy = context_log = None
