@@ -302,11 +302,20 @@ function renderMessages(messages, target, counterparts = [], side = '') {
   });
 }
 
-function messageTimeline(messages, side) {
+function messageTimeline(messages, side, completion) {
   const root = el('div', 'timeline message-timeline');
-  root.append(el('div', 'small-note', `真实输入消息顺序 · ${number(messages.length)} 条`));
+  root.append(el('div', 'small-note', '输入上下文 → 本次监督输出'));
+  root.append(append(el('div', 'message-phase-labels'), el('span'), el('span', '', `${number(messages.length)} 条输入消息`), el('span', 'output-phase', '目标输出')));
+  const jumpToOutput = () => {
+    const target = document.getElementById(`target-${side}`);
+    if (!target) return;
+    const thinking = target.querySelector('details'); if (thinking) thinking.open = true;
+    target.scrollIntoView({behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block:'center'});
+  };
+  const tools = completion.tool_calls || [];
   for (const [lane, label] of [['input', '输入'], ['reasoning', '模型'], ['tool', '工具']]) {
     const track = el('div', 'lane-track');
+    track.style.gap = messages.length > 80 ? '0' : messages.length > 35 ? '1px' : '2px';
     messages.forEach((message, index) => {
       const active = lane === 'input' ? ['system', 'user'].includes(message.role) : lane === 'reasoning' ? message.role === 'assistant' : message.role === 'tool' || message.tool_calls?.length > 0;
       const point = button('', () => {
@@ -320,7 +329,20 @@ function messageTimeline(messages, side) {
       point.title = `消息 ${index+1} · ${roleNames[message.role] || message.role}`;
       point.setAttribute('aria-label', point.title); track.append(point);
     });
-    root.append(append(el('div','timeline-lane'),el('span','lane-name',label),track));
+    let endpoint = el('span', 'message-endpoint empty-endpoint', '—');
+    if (lane === 'reasoning') {
+      endpoint = button('Assistant 输出', jumpToOutput, 'message-endpoint output-endpoint');
+      endpoint.title = '本次监督目标 · Thinking、正文与工具调用参数';
+      endpoint.setAttribute('aria-label', `${side === 'original' ? '原始' : '重写'}轨迹 · 跳到本次监督输出`);
+    } else if (lane === 'tool' && tools.length) {
+      endpoint = button(tools.map(toolDescription).join(' / '), jumpToOutput, 'message-endpoint tool-endpoint');
+      endpoint.title = '模型输出中的工具调用参数；工具尚未执行';
+      endpoint.setAttribute('aria-label', `${side === 'original' ? '原始' : '重写'}轨迹 · 输出中的工具调用`);
+    } else if (lane === 'tool' && completion.tool_calls_available === false) {
+      endpoint = el('span', 'message-endpoint missing-endpoint', '未导出');
+      endpoint.title = '此历史导出未保留目标工具字段，不能据此判断有无调用';
+    }
+    root.append(append(el('div','timeline-lane'),el('span','lane-name',label),track,endpoint));
   }
   return root;
 }
@@ -377,20 +399,24 @@ async function showSft() {
     const right = sidePane('SFT 重写轨迹', 'rewritten', '重写后 · 实际使用版本');
     const split = append(el('div', 'split'), left.pane, right.pane); content.append(split);
     for (const [name, current, peer, target] of [['original', original, rewritten, left.body], ['rewritten', rewritten, original, right.body]]) {
-      if (current.messages?.length) target.append(messageTimeline(current.messages, name));
-      const reasoning = current.reasoning ?? current.current_reasoning;
-      if (reasoning !== undefined) target.append(detailGroup('当前监督 Thinking', reasoning, 'reasoning', true, peer.reasoning ?? peer.current_reasoning, name));
-      const output = current.content ?? current.output;
-      if (output) target.append(detailGroup('模型正文 / 输出', output, '', true, peer.content ?? peer.output, name));
-      else if (current.content_available === true || output === '') target.append(el('p', 'small-note', '此目标没有正文，动作位于下方工具调用字段。'));
-      const tools = current.tool_calls;
-      if (Array.isArray(tools) && tools.length) tools.forEach(tool => target.append(detailGroup(`工具参数 · ${toolDescription(tool)}`, toolArguments(tool), 'code', false)));
-      else if (tools === undefined || current.tool_calls_available === false) target.append(el('p', 'small-note', '本导出未提供完整工具参数，无法由此判断有无工具调用。'));
+      if (current.messages?.length) target.append(messageTimeline(current.messages, name, current));
       if (current.messages?.length) {
         const context = el('details', 'details-group');
-        context.append(el('summary', '', `展开真实上下文 · ${current.messages.length} 条消息`));
+        context.append(el('summary', '', `展开输入上下文 · ${current.messages.length} 条消息`));
         const inner = el('div'); renderMessages(current.messages, inner, peer.messages || [], name); context.append(inner); target.append(context);
       }
+      const supervised = el('section', 'supervised-output'); supervised.id = `target-${name}`;
+      supervised.append(append(el('div', 'supervised-heading'), el('h3', '', '本次监督输出'), badge('Assistant', 'generator')));
+      const reasoning = current.reasoning ?? current.current_reasoning;
+      if (reasoning !== undefined) supervised.append(detailGroup('当前监督 Thinking', reasoning, 'reasoning', true, peer.reasoning ?? peer.current_reasoning, name));
+      const output = current.content ?? current.output;
+      if (output) supervised.append(detailGroup('模型正文 / 输出', output, '', true, peer.content ?? peer.output, name));
+      else if (current.content_available === false) supervised.append(el('p', 'small-note', '此历史导出未保留目标正文。'));
+      else if (current.content_available === true) supervised.append(el('p', 'small-note', '本次输出无正文，见 Thinking 与下方工具调用。'));
+      const tools = current.tool_calls;
+      if (Array.isArray(tools) && tools.length) tools.forEach(tool => supervised.append(detailGroup(`工具参数 · ${toolDescription(tool)}`, toolArguments(tool), 'code', false)));
+      else if (tools === undefined || current.tool_calls_available === false) supervised.append(el('p', 'small-note', '本导出未提供完整工具参数，无法由此判断有无工具调用。'));
+      target.append(supervised);
     }
     content.append(el('p', 'small-note', '词级标色反映两侧文本中新增或减少的词，消息顺序与原记录一致。上下文和当前监督目标分开显示。'));
     content.append(sourceDetails(data.provenance || data.source || row.source));

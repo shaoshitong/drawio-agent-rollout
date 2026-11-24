@@ -32,6 +32,8 @@ The export reads archived sources through the same existing SSH transport. It se
 
 The resulting file works directly from `file://` with no server. It contains CSS, JavaScript, selected paired text, recorded call details, images, all available training loss points, and provenance. Repeated input messages are interned to reduce size. Its content security policy blocks network connections. The UI lists only embedded SFT decisions and distinguishes aggregate-only historical runs. The adjacent receipt records coverage and the final HTML SHA-256. The HTML is a user-requested local deliverable; do not commit it or other evidence into Git.
 
+Each SFT sequence displays its input context followed by a separate Assistant supervision output. The terminal marker links to the actual saved Thinking, text and tool-call parameters. A tool call in the target is not a subsequent tool execution result. Historical fields omitted by the source exporter are labeled as unavailable rather than empty.
+
 After a UI-only change, rebuild the shell around the existing embedded evidence without connecting remotely.
 
 ```sh
