@@ -40,7 +40,7 @@ def start_model(args, python=None):
                "--sampling-defaults", "model", "--reasoning-parser", "qwen3",
                "--tool-call-parser", "qwen3_coder", "--preferred-sampling-params",
                json.dumps({"min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0})]
-    if getattr(args, "recover_thinking_loop", False):
+    if getattr(args, "recover_thinking_loop", False) or getattr(args, "build_after_tools", 0):
         command.append("--enable-custom-logit-processor")
     save(args.out / "server-command.json", command)
     log = (args.out / "server.log").open("wb")

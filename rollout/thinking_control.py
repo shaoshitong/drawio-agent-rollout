@@ -11,6 +11,11 @@ class ThinkingLoopProcessor:
         from sft.detect_loop import reasoning_loop
 
         output = req.output_ids
+        prefix = params.get("forced_prefix_ids")
+        if prefix:
+            return prefix[len(output)] if len(output) < len(prefix) else None
+        if params.get("recover_thinking_loop") is False:
+            return None
         state = getattr(req, "_drawio_thinking_control", None)
         if state is None:
             start, end = params["think_start_id"], params["think_end_id"]
@@ -67,3 +72,17 @@ def request_control(tokenizer, model_path):
                 "think_start_id": tokenizer.convert_tokens_to_ids("<think>"),
                 "think_end_id": tokenizer.convert_tokens_to_ids("</think>"),
                 "newline_id": tokenizer.encode("\n", add_special_tokens=False)[0]}}
+
+
+def tool_prefix(tokenizer, tools, call, marker=None):
+    """Serialize the same native tool syntax used in the supervised targets."""
+    messages = [{"role": "user", "content": "Construct the draft."}]
+    options = {"tools": tools, "enable_thinking": False, "tokenize": False}
+    prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, **options)
+    assistant = {"role": "assistant", "content": "", "reasoning_content": "", "tool_calls": [
+        {"id": "draft", "type": "function", "function": call}]}
+    rendered = tokenizer.apply_chat_template(messages + [assistant], add_generation_prompt=False, **options)
+    if not rendered.startswith(prompt):
+        raise ValueError("Native tool serialization changed its generation prefix")
+    text = rendered[len(prompt):]
+    return tokenizer.encode(text.split(marker, 1)[0] if marker else text, add_special_tokens=False)

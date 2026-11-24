@@ -135,6 +135,14 @@ class Proxy(BaseHTTPRequestHandler):
             body = json.dumps(data, ensure_ascii=False).encode()
         if getattr(self.server, "thinking_control", None):
             data.update(self.server.thinking_control)
+            if state_proof and state_proof.get("build_phase"):
+                from thinking_control import tool_prefix
+
+                phase = state_proof["build_phase"]
+                prefix = tool_prefix(self.server.state_policy.processor.tokenizer, data["tools"],
+                                     phase["forced_call"], phase["content_marker"])
+                data["custom_params"] = {**data["custom_params"], "forced_prefix_ids": prefix}
+                phase["forced_prefix_tokens"] = len(prefix)
             body = json.dumps(data, ensure_ascii=False).encode()
         record = {
             "request_number": next(self.server.request_counter),
@@ -272,10 +280,11 @@ def main():
         server.state_policy = StateContext(processor, args.build_after_tools)
         server.state_store = Store(args.context_cache / "archive")
         server.state_case = args.state_case
-        if args.recover_thinking_loop:
+        if args.recover_thinking_loop or args.build_after_tools:
             from thinking_control import request_control
 
             server.thinking_control = request_control(processor.tokenizer, args.state_prefix_model)
+            server.thinking_control["custom_params"]["recover_thinking_loop"] = args.recover_thinking_loop
     elif args.context_cache:
         from types import SimpleNamespace
         from sft.rewrite_cot import Rewriter
