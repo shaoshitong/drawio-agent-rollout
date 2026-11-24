@@ -40,6 +40,8 @@ def start_model(args, python=None):
                "--sampling-defaults", "model", "--reasoning-parser", "qwen3",
                "--tool-call-parser", "qwen3_coder", "--preferred-sampling-params",
                json.dumps({"min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0})]
+    if getattr(args, "recover_thinking_loop", False):
+        command.append("--enable-custom-logit-processor")
     save(args.out / "server-command.json", command)
     log = (args.out / "server.log").open("wb")
     environment = dict(os.environ, PATH=str(Path(python or sys.executable).parent) + os.pathsep + os.environ["PATH"],
@@ -53,7 +55,7 @@ def start_model(args, python=None):
         environment["DSH_MATCH_TRAINING_IMAGES"] = "1"
     if compat or causal or environment.get("DSH_MASK_PROCESS_TITLE") == "1":
         environment["PYTHONPATH"] = os.pathsep.join((str(HERE.parent / "rollout/h20_bootstrap"),
-            str(HERE.parent / "rollout"), environment.get("PYTHONPATH", "")))
+            str(HERE.parent / "rollout"), str(HERE.parent), environment.get("PYTHONPATH", "")))
     process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True,
                                env=environment)
     return process, log
@@ -66,6 +68,8 @@ def start_context_proxy(args, case):
         "--audit", str(args.out / "generator-context-requests.jsonl"), "--capture-raw",
         "--context-cache", str(args.out / "context"),
         "--state-prefix-model", str(args.model_path), "--state-case", str(case)]
+    if getattr(args, "recover_thinking_loop", False):
+        command.append("--recover-thinking-loop")
     environment = dict(os.environ, PATH=str(python.parent) + os.pathsep + os.environ["PATH"],
                        CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1", TOKENIZERS_PARALLELISM="false")
     log = (args.out / "context-proxy.log").open("wb")
@@ -124,6 +128,10 @@ def reconstruct(args, key):
     previous = getattr(args, "resume_generator", None)
     if previous:
         shutil.copytree(previous, args.out, dirs_exist_ok=True, symlinks=True)
+        # A previous host interruption is evidence, not a latch for this new attempt.
+        interrupted = args.out / "host-loop-outcome.json"
+        if interrupted.exists():
+            interrupted.rename(args.out / "resumed-host-loop-outcome.json")
         case = args.out / "case"
     else:
         case = prepare_case(args)
@@ -146,6 +154,7 @@ def reconstruct(args, key):
         "reference_sha256": sha256(args.reference.read_bytes()).hexdigest(),
         "deployment": getattr(args, "deployment", "Checkpoint served in BF16; numerical PEFT/export parity not yet certified"),
         "reviewer_matches_teacher_model": True, "reviewer_budget_cny": 12}
+    protocol["thinking_loop_recovery"] = getattr(args, "recover_thinking_loop", False)
     protocol["preserve_raw_tool_schema"] = True
     if getattr(args, "causal_context", False):
         from sft.state_prefix import POLICY

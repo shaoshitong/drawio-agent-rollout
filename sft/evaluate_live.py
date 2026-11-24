@@ -34,6 +34,7 @@ def wait_for_memory(args):
 
 def watch_evaluation(devices, services, done, output, active=None):
     active = active if active is not None else {"folder": output / "evaluation", "started": time.time()}
+    pending_recovery = {}
     while not done.wait(5):
         raw = subprocess.check_output(["nvidia-smi", "-i", devices,
             "--query-gpu=memory.free", "--format=csv,noheader,nounits"], text=True)
@@ -52,6 +53,13 @@ def watch_evaluation(devices, services, done, output, active=None):
         summary = response_summary([paths[-1].read_bytes()], with_reasoning=True)
         loop = reasoning_loop(summary["reasoning_text"])
         if loop:
+            if active.get("recover_thinking_loop"):
+                # Old repeated reasoning remains in the stream after a successful switch.
+                if summary["content_characters"] or summary["tool_calls"] or summary.get("finish_reason"):
+                    continue
+                detected = pending_recovery.setdefault(paths[-1], time.monotonic())
+                if time.monotonic() - detected < 15:
+                    continue
             save(folder / "host-loop-outcome.json", {
                 "outcome": "HOST_DETECTED_REASONING_LOOP", "at": time.time(),
                 "natural_model_end": False, "completed_reconstruction": False,
@@ -121,6 +129,7 @@ def main():
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--resume-generator", type=Path)
     parser.add_argument("--neutral-resume", action="store_true")
+    parser.add_argument("--recover-thinking-loop", action="store_true")
     parser.add_argument("--resume-note", default="")
     parser.add_argument("--wait-for-memory", action="store_true")
     parser.add_argument("--gpu", default="6")
@@ -147,7 +156,8 @@ def main():
     args.preserve_thinking = False
     args.deployment = "Frozen full-parameter checkpoint loaded in BF16; deterministic CPU context"
     services, done = [], Event()
-    active = {"folder": args.out / "evaluation", "started": time.time()}
+    active = {"folder": args.out / "evaluation", "started": time.time(),
+              "recover_thinking_loop": args.recover_thinking_loop}
     watcher = Thread(target=watch_evaluation, args=(args.gpu,
                      services, done, args.out, active), daemon=True)
     watcher.start()

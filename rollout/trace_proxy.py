@@ -131,6 +131,9 @@ class Proxy(BaseHTTPRequestHandler):
                     self.send_error(502, "Context preprocessing failed")
                     return
             body = json.dumps(data, ensure_ascii=False).encode()
+        if getattr(self.server, "thinking_control", None):
+            data.update(self.server.thinking_control)
+            body = json.dumps(data, ensure_ascii=False).encode()
         record = {
             "request_number": next(self.server.request_counter),
             "timestamp": time.time(),
@@ -143,6 +146,8 @@ class Proxy(BaseHTTPRequestHandler):
         }
         if state_proof:
             record["state_prefix"] = state_proof
+        if getattr(self.server, "thinking_control", None):
+            record["thinking_loop_recovery"] = data["custom_params"]
         record["sampling"] = {
             key: data[key]
             for key in (
@@ -242,6 +247,7 @@ def main():
     parser.add_argument("--context-endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     parser.add_argument("--state-prefix-model", type=Path)
     parser.add_argument("--state-case", type=Path)
+    parser.add_argument("--recover-thinking-loop", action="store_true")
     args = parser.parse_args()
     if args.strip_history_thinking or args.context_cache or args.state_prefix_model:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -251,6 +257,7 @@ def main():
     server.capture_raw = args.capture_raw
     server.strip_history, server.context_policy = args.strip_history_thinking, None
     server.state_policy = None
+    server.thinking_control = None
     if args.state_prefix_model:
         from transformers import AutoProcessor
         from sft.state_context import StateContext
@@ -262,6 +269,10 @@ def main():
         server.state_policy = StateContext(processor)
         server.state_store = Store(args.context_cache / "archive")
         server.state_case = args.state_case
+        if args.recover_thinking_loop:
+            from thinking_control import request_control
+
+            server.thinking_control = request_control(processor.tokenizer, args.state_prefix_model)
     elif args.context_cache:
         from types import SimpleNamespace
         from sft.rewrite_cot import Rewriter
