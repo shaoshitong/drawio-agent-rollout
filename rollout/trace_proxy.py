@@ -137,6 +137,11 @@ class Proxy(BaseHTTPRequestHandler):
             from sft.state_prefix import CONTEXT_BUDGET
             from sft.store import snapshot
 
+            past = getattr(self.server, "past_observations", None)
+            if past:
+                messages = data["messages"]
+                first_reply = next((i for i, m in enumerate(messages) if m["role"] == "assistant"), len(messages))
+                data["messages"] = messages[:first_reply] + past + messages[first_reply:]
             store = self.server.state_store
             reference = store.put(data)
             snapshot_ref = snapshot(store, self.server.state_case)
@@ -310,6 +315,7 @@ def main():
     parser.add_argument("--context-endpoint", default="http://127.0.0.1:32527/v1/chat/completions")
     parser.add_argument("--state-prefix-model", type=Path)
     parser.add_argument("--state-case", type=Path)
+    parser.add_argument("--past-observations", type=Path)
     parser.add_argument("--recover-thinking-loop", action="store_true")
     parser.add_argument("--build-after-tools", type=int, default=0)
     args = parser.parse_args()
@@ -333,6 +339,8 @@ def main():
         server.state_policy = StateContext(processor, args.build_after_tools)
         server.state_store = Store(args.context_cache / "archive")
         server.state_case = args.state_case
+        if args.past_observations:
+            server.past_observations = json.loads(args.past_observations.read_text())
         if args.recover_thinking_loop or args.build_after_tools:
             from thinking_control import request_control
 

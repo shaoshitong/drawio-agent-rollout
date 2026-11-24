@@ -67,7 +67,9 @@ def start_context_proxy(args, case):
         "--port", str(args.port + 101), "--upstream", f"http://127.0.0.1:{args.port}",
         "--audit", str(args.out / "generator-context-requests.jsonl"), "--capture-raw",
         "--context-cache", str(args.out / "context"),
-        "--state-prefix-model", str(args.model_path), "--state-case", str(case)]
+        "--state-prefix-model", str(getattr(args, "state_prefix_model", args.model_path)), "--state-case", str(case)]
+    if getattr(args, "build_seed", None):
+        command.extend(("--past-observations", str(args.build_seed / "past.json")))
     if getattr(args, "recover_thinking_loop", False):
         command.append("--recover-thinking-loop")
     if getattr(args, "build_after_tools", 0):
@@ -135,6 +137,9 @@ def reconstruct(args, key):
         if interrupted.exists():
             interrupted.rename(args.out / "resumed-host-loop-outcome.json")
         case = args.out / "case"
+    elif getattr(args, "build_seed", None):
+        case = args.out / "case"
+        shutil.copytree(args.build_seed / "case", case)
     else:
         case = prepare_case(args)
     store = Store(args.out / "reviewer-archive")
@@ -168,6 +173,8 @@ def reconstruct(args, key):
     if previous:
         protocol["resumed_generator_from"] = str(previous)
         protocol["neutral_resume"] = config.neutral_resume
+    if getattr(args, "build_seed", None):
+        protocol["inherited_observations_sha256"] = sha256((args.build_seed / "past.json").read_bytes()).hexdigest()
     save(args.out / "protocol.json", protocol)
     generator_session = reviewer_session = None
     context_proxy = context_log = None
