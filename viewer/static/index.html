@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Trajectory Lab · Qwen 9B</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#workspace">跳到轨迹内容</a>
+<div id="app">
+  <header class="app-header">
+    <div class="identity"><span class="brand-mark" aria-hidden="true">↗</span><div><div class="eyebrow">DRAWIO AGENT / RESEARCH</div><h1>Trajectory Lab</h1></div></div>
+    <div class="header-meta"><span class="live-dot" aria-hidden="true"></span><span id="model-name">Qwen 9B</span><span class="header-divider"></span><span id="snapshot-time">正在读取真实记录</span></div>
+    <button id="refresh" class="button subtle" type="button">刷新记录 ↻</button>
+  </header>
+  <nav class="tabs" aria-label="分析视图">
+    <button class="tab active" data-view="sft" aria-selected="true" type="button">SFT 重写对比 <span id="sft-count" class="count">—</span></button>
+    <button class="tab" data-view="rollout" aria-selected="false" type="button">Rollout 轨迹 <span id="run-count" class="count">—</span></button>
+    <button class="tab" data-view="training" aria-selected="false" type="button">训练进程</button>
+    <div class="tabs-end" id="training-state"></div>
+  </nav>
+  <div class="shell">
+    <aside class="sidebar" aria-label="轨迹列表">
+      <div class="sidebar-head"><div class="section-kicker" id="list-title">监督样本</div><p id="list-note">同一决策的原始轨迹与实际重写版本</p></div>
+      <div class="sidebar-controls">
+        <label class="episode-field" id="episode-field">教师 episode<select id="episode-filter" aria-label="选择教师 episode"><option value="loaded">首批已载入</option><option value="historical">仅历史 10 条导出</option></select></label>
+        <label class="search-field"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索样本、动作或运行" aria-label="搜索轨迹"></label>
+        <div class="filter-row"><label for="checkpoint-filter">训练阶段</label><select id="checkpoint-filter"><option value="all">全部阶段</option></select></div>
+      </div>
+      <div id="record-list" class="record-list" aria-live="polite"><p class="list-empty">正在读取…</p></div>
+      <div class="sidebar-footer">只读浏览 · 按真实来源标注<br><span>原始文件与模型身份可在详情中核对</span></div>
+    </aside>
+    <main id="workspace" tabindex="-1">
+      <div id="fatal-error" class="notice error" role="alert" hidden></div>
+      <div id="content" aria-live="polite"><div class="loading-state"><span class="spinner"></span>正在载入轨迹索引</div></div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

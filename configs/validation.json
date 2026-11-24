@@ -1,7 +1,0 @@
-{
-  "corpus": "evaluation/drawio_semantic_compiler_20261112/corpus/corpus.jsonl",
-  "release": "evaluation/drawio_semantic_compiler_release_20261112/final",
-  "validation": "evaluation/drawio_semantic_compiler_release_20261112/validation",
-  "generalization": "evaluation/drawio_compare_20261111/generalization_20261111",
-  "acceptance": "evaluation/drawio_compare_20261111/acceptance_v9"
-}

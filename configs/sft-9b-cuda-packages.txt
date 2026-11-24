@@ -1,3 +1,0 @@
--r sft-9b-packages.txt
-causal-conv1d==1.7.0
-ninja==1.13.2
