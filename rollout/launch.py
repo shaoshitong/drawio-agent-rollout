@@ -1,0 +1,378 @@
+"""Launch two independent SGLang models and one bounded DSH rollout on one GPU."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from urllib.request import urlopen
+
+
+HERE = Path(__file__).resolve().parent
+
+
+def long_context_overlay(source, output):
+    config = json.loads((source / "config.json").read_text())
+    config["text_config"]["rope_parameters"].update(
+        rope_type="yarn", factor=4.0, original_max_position_embeddings=262144
+    )
+    output.mkdir()
+    for path in source.iterdir():
+        if path.name != "config.json":
+            (output / path.name).symlink_to(path.resolve(), target_is_directory=path.is_dir())
+    (output / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+    return output
+
+
+def ready(process, port, timeout=600):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError(f"Inference server {port} exited: {process.returncode}")
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as response:
+                if response.status == 200:
+                    return
+        except OSError:
+            time.sleep(2)
+    raise TimeoutError(f"Inference server {port} did not become ready")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("--runtime", type=Path)
+    parser.add_argument("--reference", required=True, type=Path)
+    parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--generator", choices=("4B", "9B"), default="4B")
+    parser.add_argument("--rounds", type=int, default=4)
+    parser.add_argument(
+        "--resume-from", type=Path, help="Continue this model's episode without rerunning completed stages"
+    )
+    parser.add_argument("--resume-note", default="")
+    parser.add_argument(
+        "--seed-from", type=Path, help="Start a fresh DSH context from this model's own saved candidate"
+    )
+    parser.add_argument("--context-window", type=int, default=65536)
+    parser.add_argument("--reviewer-context-window", type=int)
+    parser.add_argument("--generator-mem-fraction", type=float, default=0.45)
+    parser.add_argument("--reviewer-mem-fraction", type=float, default=0.35)
+    parser.add_argument("--long-context-yarn", action="store_true")
+    parser.add_argument("--generator-port", type=int, default=30000)
+    parser.add_argument("--reviewer-port", type=int, default=30001)
+    parser.add_argument("--mamba-cache-size", type=int)
+    parser.add_argument("--max-tokens", type=int, default=32768)
+    parser.add_argument("--reasoning-effort", choices=("high", "off"), default="high")
+    parser.add_argument("--areal", action="store_true", help="Capture native unscored AReaL tensors")
+    parser.add_argument("--diagnose-mode", choices=("full", "no-skill", "minimal"))
+    parser.add_argument("--direct-first", action="store_true")
+    parser.add_argument(
+        "--serve-only",
+        action="store_true",
+        help="Keep owned model services alive across independent diagnostic episodes",
+    )
+    parser.add_argument("--reviewer-only", action="store_true")
+    args = parser.parse_args()
+    if args.diagnose_mode and (
+        args.areal or args.resume_from or args.seed_from or args.reasoning_effort != "off"
+    ):
+        parser.error("Matched diagnostics require fresh instruct episodes without AReaL")
+    if args.resume_from and args.seed_from:
+        parser.error("Choose session continuation or a fresh context seeded from own work")
+    if args.areal and (
+        args.reasoning_effort != "off"
+        or args.resume_from
+        or args.seed_from
+        or (args.context_window, args.max_tokens) != (65536, 32768)
+    ):
+        parser.error("The native collector currently requires a fresh instruct 64K/32K episode")
+    args.out.mkdir(parents=True)
+    processes = []
+    logs = []
+    environment = dict(
+        os.environ,
+        OMP_NUM_THREADS="4",
+        TOKENIZERS_PARALLELISM="false",
+        HF_HUB_OFFLINE="1",
+        TRANSFORMERS_OFFLINE="1",
+    )
+    environment["PATH"] = (
+        str(Path(sys.executable).parent) + os.pathsep + environment.get("PATH", "/usr/bin:/bin")
+    )
+    try:
+        gpu_log = (args.out / "gpu.csv").open("wb")
+        logs.append(gpu_log)
+        processes.append(
+            subprocess.Popen(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=timestamp,index,name,memory.used,utilization.gpu",
+                    "--format=csv",
+                    "-l",
+                    "2",
+                ],
+                stdout=gpu_log,
+                stderr=subprocess.STDOUT,
+            )
+        )
+        services = [
+            (
+                "generator",
+                args.generator,
+                args.generator_port,
+                args.generator_mem_fraction,
+                args.context_window,
+            ),
+            (
+                "reviewer",
+                "4B",
+                args.reviewer_port,
+                args.reviewer_mem_fraction,
+                args.reviewer_context_window or args.context_window,
+            ),
+        ]
+        if args.reviewer_only:
+            if not args.serve_only:
+                parser.error("reviewer-only requires the independent model service lifecycle")
+            services = services[1:]
+        for role, size, port, fraction, context in services:
+            model = f"Qwen/Qwen3.5-{size}"
+            mode = "instruct" if role == "reviewer" or args.reasoning_effort == "off" else "precise-coding"
+            serving = args.root / "serving" / f"Qwen3.5-{size}-{mode}-v1"
+            if args.long_context_yarn and role == "generator":
+                serving = long_context_overlay(serving, args.out / "generator-serving")
+                environment["SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN"] = "1"
+            command = [
+                sys.executable,
+                "-m",
+                "sglang.launch_server",
+                "--model-path",
+                str(serving),
+                "--sampling-defaults",
+                "model",
+                "--served-model-name",
+                model,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--tp",
+                "1",
+                "--dtype",
+                "bfloat16",
+                "--context-length",
+                str(context),
+                "--max-total-tokens",
+                str(context),
+                "--max-running-requests",
+                "1",
+                "--mem-fraction-static",
+                str(fraction),
+                "--cuda-graph-max-bs",
+                "1",
+                "--preferred-sampling-params",
+                json.dumps(
+                    {
+                        "min_p": 0.0,
+                        "presence_penalty": 1.5 if mode == "instruct" else 0.0,
+                        "repetition_penalty": 1.0,
+                    }
+                ),
+                "--reasoning-parser",
+                "qwen3",
+                "--tool-call-parser",
+                "qwen3_coder",
+            ]
+            if args.mamba_cache_size is not None:
+                command.extend(("--max-mamba-cache-size", str(args.mamba_cache_size)))
+            log = (args.out / f"{role}-server.log").open("wb")
+            logs.append(log)
+            process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=environment)
+            processes.append(process)
+            ready(process, port)
+            print(
+                json.dumps(
+                    {"role": role, "server_ready": True, "port": port, "model": model, "pid": process.pid}
+                ),
+                flush=True,
+            )
+            if not (args.diagnose_mode or args.serve_only):
+                audit = args.out / f"{role}-requests.jsonl"
+                proxy = subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(HERE / "trace_proxy.py"),
+                        "--port",
+                        str(port + 101),
+                        "--upstream",
+                        f"http://127.0.0.1:{port}",
+                        "--audit",
+                        str(audit),
+                    ],
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    env=environment,
+                )
+                processes.append(proxy)
+        if args.serve_only:
+
+            def terminate(signum, _):
+                raise SystemExit(128 + signum)
+
+            signal.signal(signal.SIGTERM, terminate)
+            (args.out / "services-ready.json").write_text(
+                json.dumps(
+                    {
+                        "generator": None if args.reviewer_only else f"Qwen/Qwen3.5-{args.generator}",
+                        "reviewer": "Qwen/Qwen3.5-4B",
+                        "independent_processes": True,
+                        "training": False,
+                        "stop_file": str(args.out / "STOP"),
+                    }
+                )
+                + "\n"
+            )
+            while not (args.out / "STOP").exists():
+                if any(process.poll() is not None for process in processes):
+                    raise RuntimeError("An owned model service exited during diagnostics")
+                time.sleep(1)
+            return
+        command = [
+            sys.executable,
+            str(HERE / "rollout.py"),
+            "--runtime",
+            str(args.runtime or args.root / "runtime"),
+            "--reference",
+            str(args.reference),
+            "--out",
+            str(args.out / "episode"),
+            "--renderer-python",
+            str(args.root / "renderer/venv/bin/python"),
+            "--render-runtime",
+            str(args.root / "renderer"),
+            "--generator-model",
+            f"Qwen/Qwen3.5-{args.generator}",
+            "--rounds",
+            str(args.rounds),
+            "--context-window",
+            str(args.context_window),
+            "--max-tokens",
+            str(args.max_tokens),
+            "--reasoning-effort",
+            args.reasoning_effort,
+        ]
+        if args.resume_note:
+            command.extend(("--resume-note", args.resume_note))
+        if args.resume_from or args.seed_from:
+            previous = (args.resume_from or args.seed_from) / "episode"
+            protocol = json.loads((previous / "protocol.json").read_text())
+            if protocol["generator"] != f"Qwen/Qwen3.5-{args.generator}":
+                raise ValueError("Continue only the same generator model's episode")
+            shutil.copytree(previous / "case", args.out / "episode/case")
+            if args.resume_from:
+                for role in ("generator", "reviewer"):
+                    if (previous / role).exists():
+                        shutil.copytree(previous / role, args.out / "episode" / role)
+                command.append("--resume")
+            else:
+                command.append("--seeded")
+        if args.areal:
+            command = [
+                str(args.root / "controller/env/bin/python"),
+                str(HERE / "collect.py"),
+                "--root",
+                str(args.root),
+                "--runtime",
+                str(args.runtime),
+                "--reference",
+                str(args.reference),
+                "--tokenizer",
+                str(args.root / "serving" / f"Qwen3.5-{args.generator}-instruct-v1"),
+                "--out",
+                str(args.out / "collector"),
+                "--generator-model",
+                f"Qwen/Qwen3.5-{args.generator}",
+                "--rounds",
+                str(args.rounds),
+            ]
+        if args.diagnose_mode:
+            if args.direct_first:
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(HERE / "direct_probe.py"),
+                        "--root",
+                        str(args.root),
+                        "--reference",
+                        str(args.reference),
+                        "--out",
+                        str(args.out / "direct"),
+                        "--base-url",
+                        "http://127.0.0.1:30000/v1",
+                        "--generator-model",
+                        f"Qwen/Qwen3.5-{args.generator}",
+                        "--seed",
+                        "42",
+                    ],
+                    check=True,
+                    env=environment,
+                )
+            command = [
+                sys.executable,
+                str(HERE / "audit_episode.py"),
+                "--root",
+                str(args.root),
+                "--runtime",
+                str(args.runtime),
+                "--reference",
+                str(args.reference),
+                "--out",
+                str(args.out / "condition"),
+                "--mode",
+                args.diagnose_mode,
+                "--generator-model",
+                f"Qwen/Qwen3.5-{args.generator}",
+                "--seed",
+                "42",
+            ]
+        result = subprocess.run(command, env=environment)
+        (args.out / "launch-result.json").write_text(
+            json.dumps(
+                {
+                    "exit": result.returncode,
+                    "generator": args.generator,
+                    "reviewer": "4B",
+                    "separate_processes": True,
+                    "reviewer_updated": False,
+                    "gpu_visibility": environment.get("CUDA_VISIBLE_DEVICES"),
+                }
+            )
+            + "\n"
+        )
+        raise SystemExit(result.returncode)
+    except Exception as error:
+        (args.out / "failure.json").write_text(
+            json.dumps({"error": type(error).__name__, "message": str(error), "timestamp": time.time()})
+            + "\n"
+        )
+        raise
+    finally:
+        for process in reversed(processes):
+            if process.poll() is None:
+                process.terminate()
+        for process in processes:
+            try:
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        for log in logs:
+            log.close()
+
+
+if __name__ == "__main__":
+    main()

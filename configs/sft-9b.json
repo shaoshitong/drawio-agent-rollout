@@ -1,0 +1,30 @@
+{
+  "model_name": "Qwen/Qwen3.5-9B",
+  "max_seq_length": 262144,
+  "enable_thinking": true,
+  "preflight_samples": 64,
+  "evaluation_enabled": true,
+  "validation_samples": 32,
+  "train_probe_samples": 16,
+  "split": "train",
+  "num_train_epochs": 1.0,
+  "max_steps": -1,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 8,
+  "difficulty_stages": 8,
+  "sampler_policy": "episode_component_quantiles_hf_length_grouped_v1",
+  "learning_rate": 0.00002,
+  "warmup_ratio": 0.03,
+  "lr_scheduler_type": "constant_with_warmup",
+  "max_grad_norm": 1.0,
+  "seed": 3407,
+  "lora_rank": 16,
+  "lora_alpha": 32,
+  "save_steps": 5,
+  "target_modules": [
+    "q_proj", "k_proj", "v_proj", "o_proj",
+    "gate_proj", "up_proj", "down_proj",
+    "in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a", "out_proj",
+    "in_proj_ba", "in_proj_qkvz"
+  ]
+}
