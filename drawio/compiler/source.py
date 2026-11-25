@@ -17,20 +17,27 @@ LIMIT = 256 * 1024**2
 
 @dataclass(frozen=True)
 class Loc:
-    """Start of an element. ``decoded`` positions index the unpacked page text."""
+    """Start of an element or record. ``decoded`` positions index the unpacked page text.
 
-    line: int
-    column: int
-    byte: int
+    JSON inputs without line positions are located by ``path``, a JSON pointer.
+    """
+
+    line: int | None = None
+    column: int | None = None
+    byte: int | None = None
     page: int | None = None
     decoded: bool = False
+    path: str | None = None
 
     def to_json(self):
-        result = {"line": self.line, "column": self.column, "byte": self.byte}
-        if self.page is not None:
-            result["page"] = self.page
+        result = {}
+        for key in ("line", "column", "byte", "page"):
+            if getattr(self, key) is not None:
+                result[key] = getattr(self, key)
         if self.decoded:
             result["in_decoded_page"] = True
+        if self.path is not None:
+            result["path"] = self.path
         return result
 
 
@@ -56,8 +63,13 @@ class Diagnostic:
     def __str__(self):
         where = ""
         if self.loc is not None:
-            page = "" if self.loc.page is None else f"page {self.loc.page} "
-            where = f" at {page}line {self.loc.line} column {self.loc.column}"
+            parts = [] if self.loc.page is None else [f"page {self.loc.page}"]
+            if self.loc.line is not None:
+                parts.append(f"line {self.loc.line} column {self.loc.column}")
+            if self.loc.path is not None:
+                parts.append(self.loc.path)
+            if parts:
+                where = " at " + " ".join(parts)
         cell = "" if self.cell_id is None else f" (cell {self.cell_id!r})"
         return f"{self.severity}[{self.code}]{where}{cell}: {self.message}"
 

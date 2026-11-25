@@ -56,6 +56,29 @@ def fragment(element):
     return f"<{element.tag}{attributes}>{''.join(body)}</{element.tag}>"
 
 
+def geometry_role(child):
+    """The Geometry field a child of ``<mxGeometry>`` encodes, or None for extension content."""
+    role = child.get("as")
+    points = child.elements()
+    if child.tag == "mxPoint" and role in POINT_ROLES and not points and child.attrs.keys() <= {"x", "y", "as"}:
+        return POINT_ROLES[role]
+    if (
+        child.tag == "Array"
+        and role == "points"
+        and child.attrs.keys() == {"as"}
+        and all(p.tag == "mxPoint" and p.attrs.keys() <= {"x", "y"} and not p.elements() for p in points)
+    ):
+        return "points"
+    if (
+        child.tag == "mxRectangle"
+        and role == "alternateBounds"
+        and not points
+        and child.attrs.keys() <= {"x", "y", "width", "height", "as"}
+    ):
+        return "alternate_bounds"
+    return None
+
+
 class Builder:
     def __init__(self, source):
         self.source = source
@@ -441,36 +464,19 @@ class Builder:
         extras, seen = [], set()
         for child in element.elements():
             role = child.get("as")
-            points = child.elements()
-            plain = not points
             if role in seen:
                 self.note("error", "duplicate_geometry", f"geometry has more than one {role}", child, cell_id)
-            elif (
-                child.tag == "mxPoint"
-                and role in POINT_ROLES
-                and plain
-                and child.attrs.keys() <= {"x", "y", "as"}
-            ):
-                setattr(geometry, POINT_ROLES[role], (read(child, "x"), read(child, "y")))
-            elif (
-                child.tag == "Array"
-                and role == "points"
-                and child.attrs.keys() == {"as"}
-                and all(
-                    p.tag == "mxPoint" and p.attrs.keys() <= {"x", "y"} and not p.elements() for p in points
-                )
-            ):
-                geometry.points = tuple((read(p, "x"), read(p, "y")) for p in points)
-            elif (
-                child.tag == "mxRectangle"
-                and role == "alternateBounds"
-                and plain
-                and child.attrs.keys() <= {"x", "y", "width", "height", "as"}
-            ):
-                geometry.alternate_bounds = tuple(read(child, k) for k in ("x", "y", "width", "height"))
-            else:
+                continue
+            key = geometry_role(child)
+            if key is None:
                 extras.append(fragment(child))
                 continue
+            if key == "points":
+                geometry.points = tuple((read(p, "x"), read(p, "y")) for p in child.elements())
+            elif key == "alternate_bounds":
+                geometry.alternate_bounds = tuple(read(child, k) for k in ("x", "y", "width", "height"))
+            else:
+                setattr(geometry, key, (read(child, "x"), read(child, "y")))
             seen.add(role)
         geometry.extras = tuple(extras)
         return geometry
