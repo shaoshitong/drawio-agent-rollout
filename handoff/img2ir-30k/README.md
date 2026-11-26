@@ -22,7 +22,9 @@ codex login status
 
 ## 下载和采集
 
-输入从 [HF 的交接分支](https://huggingface.co/datasets/sst12345/png-to-editable-drawio-20261120/tree/img2ir-codex-30k/img2ir-codex-30k/inputs) 下载。下载器先固定快照 revision，再校验每个 tar 和 PNG 的 SHA-256，并生成本地队列。PNG 及其来源、版本和 CC BY 4.0 署名信息一并保存在 HF。
+输入从 [HF 的交接分支](https://huggingface.co/datasets/sst12345/png-to-editable-drawio-20261120/tree/img2ir-codex-30k/img2ir-codex-30k/inputs) 下载。首个冻结快照包含 36,000 张 PNG 和 71 个分片。[已校验的 HF 快照](https://huggingface.co/datasets/sst12345/png-to-editable-drawio-20261120/tree/4fcbfbfe251f9b5f71179382bb19ffd997ed1600/img2ir-codex-30k/inputs)
+
+下载器先固定快照 revision，再校验每个 tar 和 PNG 的 SHA-256，并生成本地队列。PNG 及其来源、版本和 CC BY 4.0 署名信息一并保存在 HF。
 
 ```bash
 WORK_DIR="$HOME/img2ir-codex-30k"
